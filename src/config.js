@@ -1,7 +1,9 @@
+const fs = require('fs');
 const path = require('path');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
-const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
+const DIST_DIR = path.join(ROOT_DIR, 'dist');
+const PUBLIC_DIR = fs.existsSync(path.join(DIST_DIR, 'index.html')) ? DIST_DIR : path.join(ROOT_DIR, 'public');
 const DATA_DIR = path.join(ROOT_DIR, 'data');
 const DB_PATH = path.join(DATA_DIR, 'db.json');
 
@@ -29,6 +31,7 @@ const defaultSettings = {
 
 module.exports = {
   ROOT_DIR,
+  DIST_DIR,
   PUBLIC_DIR,
   DATA_DIR,
   DB_PATH,

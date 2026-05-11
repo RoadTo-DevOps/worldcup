@@ -1,4 +1,6 @@
 ﻿import { api, ApiError, getToken, setToken, clearToken } from './api.js';
+import React from 'react';
+import { createRoot } from 'react-dom/client';
 import {
   LEAGUES,
   escapeHtml,
@@ -50,6 +52,8 @@ const MARKET_TYPE_LABELS = {
 };
 
 const MARKET_TYPE_ORDER = ['moneyline', 'handicap', 'total', 'double_chance', 'player_prop', 'generic', 'other'];
+const mountNode = document.getElementById('root');
+const root = mountNode ? createRoot(mountNode) : null;
 
 function setToast(message, tone = 'info') {
   state.toast = { message, tone };
@@ -589,7 +593,7 @@ function bindEvents() {
 
 async function runTask(task, successMessage, showSuccess = true) {
   state.busy = true;
-  renderTopActions();
+  render();
   try {
     await task();
     if (showSuccess) setToast(successMessage, 'good');
@@ -603,16 +607,46 @@ async function runTask(task, successMessage, showSuccess = true) {
 }
 
 function render() {
-  renderNav();
-  renderTopActions();
+  if (!root) return;
+  root.render(React.createElement(App));
+}
+
+function App() {
+  return React.createElement(
+    'div',
+    { className: 'shell' },
+    React.createElement('header', {
+      className: 'topbar',
+      dangerouslySetInnerHTML: {
+        __html: `
+          <a class="brand" href="#/home" aria-label="Worldcup Pick home">
+            <span class="brand-mark">WP</span>
+            <span>
+              <strong>Worldcup Pick</strong>
+              <small>Virtual points only</small>
+            </span>
+          </a>
+          <nav class="nav" id="nav">${renderNav()}</nav>
+          <div class="top-actions" id="topActions">${renderTopActions()}</div>
+        `
+      }
+    }),
+    React.createElement('main', {
+      className: 'app',
+      'aria-live': 'polite',
+      dangerouslySetInnerHTML: { __html: renderPageHtml() }
+    })
+  );
+}
+
+function renderPageHtml() {
   const page = routeName();
-  const app = document.getElementById('app');
-  if (page === 'auth') app.innerHTML = renderAuthPage();
-  else if (page === 'leaderboard') app.innerHTML = renderLeaderboardPage();
-  else if (page === 'profile') app.innerHTML = renderProfilePage();
-  else if (page === 'match') app.innerHTML = renderMatchPage();
-  else if (page === 'admin') app.innerHTML = renderAdminPage();
-  else app.innerHTML = renderHomePage();
+  if (page === 'auth') return renderAuthPage();
+  if (page === 'leaderboard') return renderLeaderboardPage();
+  if (page === 'profile') return renderProfilePage();
+  if (page === 'match') return renderMatchPage();
+  if (page === 'admin') return renderAdminPage();
+  return renderHomePage();
 }
 
 function renderNav() {
@@ -623,24 +657,22 @@ function renderNav() {
   ];
   if (state.me) items.push(['profile', 'Profile', '#/profile']);
   if (state.me?.role === 'admin') items.push(['admin', 'Admin', '#/admin']);
-  document.getElementById('nav').innerHTML = items
+  return items
     .map(([key, label, href]) => `<a class="${page === key ? 'active' : ''}" href="${href}">${label}</a>`)
     .join('');
 }
 
 function renderTopActions() {
-  const top = document.getElementById('topActions');
   const liveCount = state.matches.filter((match) => match.isLive || match.status === 'in').length;
   const busy = state.busy ? '<span class="mini-loader"></span>' : '';
   if (!state.me) {
-    top.innerHTML = `
+    return `
       <span class="chip live-dot">${formatNumber(liveCount)} live</span>
       <button class="icon-button" data-action="refresh" title="Refresh">↻</button>
       <a class="primary-link" href="#/auth">Login</a>
     `;
-    return;
   }
-  top.innerHTML = `
+  return `
     ${busy}
     <span class="chip live-dot">${formatNumber(liveCount)} live</span>
     <span class="chip">${formatNumber(state.me.points)} pts</span>

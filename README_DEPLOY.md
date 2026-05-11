@@ -89,7 +89,8 @@ chown -R root:root /var/www/worldcup-pick
 
 ```bash
 cd /var/www/worldcup-pick
-npm install --omit=dev
+npm install
+npm run build
 ```
 
 ## 6. Tao file .env
@@ -133,6 +134,7 @@ Doi `TOKEN_SECRET` bang chuoi vua tao.
 
 ```bash
 cd /var/www/worldcup-pick
+npm run build
 npm start
 ```
 
@@ -156,6 +158,7 @@ Chay app:
 
 ```bash
 cd /var/www/worldcup-pick
+npm run build
 pm2 start server.js --name worldcup-pick --time
 ```
 
@@ -304,7 +307,8 @@ Them:
 ```bash
 cd /var/www/worldcup-pick
 git pull
-npm install --omit=dev
+npm install
+npm run build
 pm2 restart worldcup-pick
 pm2 logs worldcup-pick --lines 80
 ```
