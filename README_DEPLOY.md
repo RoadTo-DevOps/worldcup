@@ -44,7 +44,7 @@ Cai MongoDB Community:
 ```bash
 apt install -y gnupg
 curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor
-echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" > /etc/apt/sources.list.d/mongodb-org-8.0.list
+echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/8.0 multiverse" > /etc/apt/sources.list.d/mongodb-org-8.0.list
 apt update
 apt install -y mongodb-org
 systemctl enable mongod
@@ -144,46 +144,33 @@ curl http://127.0.0.1:3000/
 
 Neu OK, bam `Ctrl+C` de tat app.
 
-## 8. Chay app bang systemd
+## 8. Chay app bang PM2
 
-Tao service:
-
-```bash
-nano /etc/systemd/system/worldcup-pick.service
-```
-
-Dan noi dung:
-
-```ini
-[Unit]
-Description=Worldcup Pick Node App
-After=network.target mongod.service
-
-[Service]
-Type=simple
-WorkingDirectory=/var/www/worldcup-pick
-ExecStart=/usr/bin/node server.js
-Restart=always
-RestartSec=5
-Environment=NODE_ENV=production
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Bat service:
+Tai PM2:
 
 ```bash
-systemctl daemon-reload
-systemctl enable worldcup-pick
-systemctl start worldcup-pick
-systemctl status worldcup-pick
+npm install -g pm2
 ```
 
-Xem log:
+Chay app:
 
 ```bash
-journalctl -u worldcup-pick -f
+cd /var/www/worldcup-pick
+pm2 start server.js --name worldcup-pick --time
+```
+
+```bash
+pm2 save
+pm2 startup systemd -u root --hp /root
+```
+
+PM2 se in ra 1 lenh khac. Copy va chay lenh do 1 lan.
+
+Xem trang thai:
+
+```bash
+pm2 status
+pm2 logs worldcup-pick
 ```
 
 ## 9. Cau hinh Nginx
@@ -194,12 +181,12 @@ Tao config:
 nano /etc/nginx/sites-available/worldcup-pick
 ```
 
-Neu co domain, thay `your-domain.com` bang domain that:
+Neu co domain `cloud-manager.cloud`, dung thang:
 
 ```nginx
 server {
     listen 80;
-    server_name your-domain.com www.your-domain.com;
+    server_name cloud-manager.cloud www.cloud-manager.cloud;
 
     client_max_body_size 2m;
 
@@ -237,7 +224,7 @@ systemctl reload nginx
 Mo trinh duyet:
 
 ```text
-http://your-domain.com
+http://cloud-manager.cloud
 ```
 
 Neu chua co domain, co the tam thoi dung IP:
@@ -254,7 +241,7 @@ Cai Certbot:
 
 ```bash
 apt install -y certbot python3-certbot-nginx
-certbot --nginx -d your-domain.com -d www.your-domain.com
+certbot --nginx -d cloud-manager.cloud -d www.cloud-manager.cloud
 ```
 
 Test auto renew:
@@ -318,8 +305,8 @@ Them:
 cd /var/www/worldcup-pick
 git pull
 npm install --omit=dev
-systemctl restart worldcup-pick
-journalctl -u worldcup-pick -n 80 --no-pager
+pm2 restart worldcup-pick
+pm2 logs worldcup-pick --lines 80
 ```
 
 Neu upload tay, thay buoc `git pull` bang viec copy source moi len server.
@@ -329,19 +316,19 @@ Neu upload tay, thay buoc `git pull` bang viec copy source moi len server.
 Trang thai app:
 
 ```bash
-systemctl status worldcup-pick
+pm2 status
 ```
 
 Restart app:
 
 ```bash
-systemctl restart worldcup-pick
+pm2 restart worldcup-pick
 ```
 
 Xem log app:
 
 ```bash
-journalctl -u worldcup-pick -f
+pm2 logs worldcup-pick
 ```
 
 Trang thai Mongo:
@@ -371,4 +358,3 @@ ss -lntp
 - Dung HTTPS khi co domain.
 - Backup DB dinh ky.
 - Token app song 2 gio theo `TOKEN_TTL_SECONDS=7200`.
-

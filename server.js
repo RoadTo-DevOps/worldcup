@@ -214,6 +214,29 @@ function activeAdminCount() {
   return db.users.filter((user) => !user.banned && user.role === 'admin').length;
 }
 
+function deleteUserAccount(user) {
+  const userId = String(user.id);
+  const before = {
+    users: db.users.length,
+    predictions: db.predictions.length,
+    walletTransactions: db.walletTransactions.length,
+    chatMessages: db.chatMessages.length,
+    notifications: db.notifications.length
+  };
+  db.users = db.users.filter((item) => String(item.id) !== userId);
+  db.predictions = db.predictions.filter((item) => String(item.userId) !== userId);
+  db.walletTransactions = db.walletTransactions.filter((item) => String(item.userId) !== userId);
+  db.chatMessages = db.chatMessages.filter((item) => String(item.userId) !== userId);
+  db.notifications = db.notifications.filter((item) => String(item.userId) !== userId);
+  return {
+    users: before.users - db.users.length,
+    predictions: before.predictions - db.predictions.length,
+    walletTransactions: before.walletTransactions - db.walletTransactions.length,
+    chatMessages: before.chatMessages - db.chatMessages.length,
+    notifications: before.notifications - db.notifications.length
+  };
+}
+
 function serializeMatch(match, userId = null) {
   const userPredictions = userId
     ? db.predictions.filter((item) => String(item.userId) === String(userId) && String(item.matchId) === String(match.id))
@@ -967,6 +990,23 @@ async function handleApi(req, res, urlObj) {
       maybePersist();
       broadcast('wallet.updated', { userId: prediction.userId });
       return ok(res, 'Prediction settled', { prediction: settled });
+    }
+
+    if (req.method === 'DELETE' && pathname.startsWith('/api/admin/users/')) {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const userId = validateMatchId(pathname.split('/')[4]);
+      const user = findUserById(userId);
+      if (!user) return fail(res, 404, 'User not found');
+      if (String(user.id) === String(admin.id)) return fail(res, 400, 'Cannot delete your own account');
+      if (user.role === 'admin' && activeAdminCount() <= 1) {
+        return fail(res, 400, 'Need at least one admin');
+      }
+      const removed = deleteUserAccount(user);
+      maybePersist();
+      broadcast('leaderboard.updated', { userId: user.id, deleted: true });
+      broadcast('wallet.updated', { userId: user.id, deleted: true });
+      return ok(res, 'User deleted', { removed });
     }
 
     if (req.method === 'PATCH' && pathname.startsWith('/api/admin/users/')) {

@@ -383,6 +383,18 @@ function bindEvents() {
       }, 'Wallet reset');
       return;
     }
+    if (action === 'delete-user') {
+      const username = button.dataset.username || 'this user';
+      const confirmed = window.confirm(`Delete account "${username}"? This removes user, bets, wallet history, chat messages, and notifications.`);
+      if (!confirmed) return;
+      await runTask(async () => {
+        await api(`/api/admin/users/${button.dataset.userId}`, { method: 'DELETE' });
+        await loadAdminData();
+        await refreshPublicData();
+        if (state.me) await refreshPrivateData();
+      }, 'User deleted');
+      return;
+    }
     if (action === 'delete-chat') {
       await runTask(async () => {
         await api(`/api/chat/${button.dataset.messageId}`, { method: 'DELETE' });
@@ -577,7 +589,7 @@ function bindEvents() {
 
 async function runTask(task, successMessage, showSuccess = true) {
   state.busy = true;
-  render();
+  renderTopActions();
   try {
     await task();
     if (showSuccess) setToast(successMessage, 'good');
@@ -1096,6 +1108,7 @@ function renderAdminPage() {
               <td class="actions">
                 <button class="ghost-button" data-action="${user.banned ? 'unban' : 'ban'}" data-user-id="${user.id}">${user.banned ? 'Unban' : 'Ban'}</button>
                 <button class="ghost-button danger" data-action="reset-user" data-user-id="${user.id}">Reset</button>
+                ${String(user.id) !== String(state.me.id) ? `<button class="ghost-button danger" data-action="delete-user" data-user-id="${user.id}" data-username="${escapeHtml(user.username)}">Delete</button>` : ''}
               </td>
             </tr>
           `).join('')}</tbody>
