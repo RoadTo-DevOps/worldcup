@@ -1,0 +1,1177 @@
+﻿import { api, ApiError, getToken, setToken, clearToken } from './api.js';
+import {
+  LEAGUES,
+  escapeHtml,
+  formatDateTime,
+  formatNumber,
+  initials,
+  statusClass,
+  statusLabel,
+  scoreLine,
+  predictionStatus,
+  routeName,
+  routeParts,
+  clampText
+} from './utils.js';
+
+const state = {
+  me: null,
+  matches: [],
+  leaderboard: [],
+  predictions: [],
+  walletHistory: [],
+  notifications: [],
+  detail: null,
+  chat: [],
+  admin: null,
+  betDrafts: {},
+  filters: {
+    league: 'all',
+    status: 'all',
+    date: '',
+    q: ''
+  },
+  matchMarketType: 'all',
+  leaderboardPeriod: 'all-time',
+  toast: null,
+  stream: null,
+  busy: false
+};
+
+const MARKET_TYPE_LABELS = {
+  all: 'Tất cả',
+  moneyline: 'Cả trận',
+  handicap: 'Handicap',
+  total: 'Tài / Xỉu',
+  double_chance: 'Kép',
+  player_prop: 'Cầu thủ',
+  generic: 'Khác',
+  other: 'Khác'
+};
+
+const MARKET_TYPE_ORDER = ['moneyline', 'handicap', 'total', 'double_chance', 'player_prop', 'generic', 'other'];
+
+function setToast(message, tone = 'info') {
+  state.toast = { message, tone };
+  window.clearTimeout(setToast.timer);
+  setToast.timer = window.setTimeout(() => {
+    state.toast = null;
+    render();
+  }, 3500);
+}
+
+function marketTypeLabel(type) {
+  return MARKET_TYPE_LABELS[type] || MARKET_TYPE_LABELS.other;
+}
+
+function marketTypeKey(market) {
+  return market?.marketType || 'other';
+}
+
+function buildMarketSections(markets) {
+  const buckets = new Map();
+  for (const market of markets || []) {
+    const key = marketTypeKey(market);
+    if (!buckets.has(key)) {
+      buckets.set(key, {
+        key,
+        label: marketTypeLabel(key),
+        markets: []
+      });
+    }
+    buckets.get(key).markets.push(market);
+  }
+  return [...buckets.values()].sort((a, b) => {
+    const left = MARKET_TYPE_ORDER.indexOf(a.key);
+    const right = MARKET_TYPE_ORDER.indexOf(b.key);
+    return (left === -1 ? 99 : left) - (right === -1 ? 99 : right);
+  }).map((section) => ({
+    ...section,
+    providers: [...new Set(section.markets.map((market) => market.provider || market.providerId || 'ESPN'))]
+  }));
+}
+
+function findFirstPick(markets) {
+  for (const market of markets || []) {
+    if (market.disabled || !Array.isArray(market.options) || !market.options.length) continue;
+    return {
+      marketKey: market.key,
+      optionKey: market.options[0].key,
+      market,
+      option: market.options[0]
+    };
+  }
+  return null;
+}
+
+function findDraftPick(matchId, markets) {
+  const draft = state.betDrafts[String(matchId)];
+  if (!draft) return null;
+  for (const market of markets || []) {
+    if (market.key !== draft.marketKey || market.disabled) continue;
+    const option = market.options?.find((item) => item.key === draft.optionKey);
+    if (option) {
+      return {
+        marketKey: market.key,
+        optionKey: option.key,
+        market,
+        option
+      };
+    }
+  }
+  return null;
+}
+
+function renderOddsValue(value) {
+  const decimal = Number(value);
+  if (Number.isFinite(decimal) && decimal > 1) {
+    return `x${decimal.toFixed(2)}`;
+  }
+  return '-';
+}
+
+function renderBetProjection(stake, odds) {
+  const bet = Number(stake || 0);
+  const decimal = Number(odds);
+  if (!Number.isFinite(bet) || bet <= 0 || !Number.isFinite(decimal) || decimal <= 1) {
+    return 'Chọn kèo để xem trả về';
+  }
+  const payout = Math.round(bet * decimal);
+  const profit = Math.max(0, payout - bet);
+  return `Đặt ${formatNumber(bet)} nhận ${formatNumber(payout)}, lời ${formatNumber(profit)}`;
+}
+
+function updateBetPreview(form) {
+  if (!form) return;
+  const preview = form.querySelector('[data-bet-preview]');
+  if (!preview) return;
+  const selected = form.querySelector('input[name="pick"]:checked');
+  const stakeInput = form.querySelector('input[name="betPoints"]');
+  const titleEl = preview.querySelector('[data-preview-title]');
+  const labelEl = preview.querySelector('[data-preview-label]');
+  const oddsEl = preview.querySelector('[data-preview-odds]');
+  const returnEl = preview.querySelector('[data-preview-return]');
+  const stake = Number(stakeInput?.value || 0);
+
+  if (!selected) {
+    if (titleEl) titleEl.textContent = 'Chưa chọn kèo';
+    if (labelEl) labelEl.textContent = 'Chọn field bên dưới';
+    if (oddsEl) oddsEl.textContent = '-';
+    if (returnEl) returnEl.textContent = 'Chọn kèo trước';
+    return;
+  }
+
+  const odds = Number(selected.dataset.odds || 0);
+  if (titleEl) titleEl.textContent = selected.dataset.marketTitle || 'Kèo';
+  if (labelEl) labelEl.textContent = selected.dataset.optionLabel || selected.value;
+  if (oddsEl) oddsEl.textContent = renderOddsValue(odds);
+  if (returnEl) returnEl.textContent = renderBetProjection(stake, odds);
+}
+
+async function boot() {
+  bindEvents();
+  await loadSession();
+  await refreshPublicData();
+  await loadRouteData();
+  openStream();
+  render();
+  window.setInterval(refreshPublicDataQuiet, 30000);
+}
+
+async function loadSession() {
+  if (!getToken()) return;
+  try {
+    const data = await api('/api/auth/me');
+    state.me = data.user;
+    await refreshPrivateData();
+  } catch (error) {
+    clearToken();
+    state.me = null;
+  }
+}
+
+async function refreshPublicData() {
+  const params = new URLSearchParams();
+  if (state.filters.league !== 'all') params.set('league', state.filters.league);
+  if (state.filters.status !== 'all') params.set('status', state.filters.status);
+  if (state.filters.date) params.set('date', state.filters.date);
+  if (state.filters.q) params.set('q', state.filters.q);
+  const [matches, leaderboard] = await Promise.all([
+    api(`/api/matches?${params.toString()}`),
+    api(`/api/leaderboard?period=${encodeURIComponent(state.leaderboardPeriod)}`)
+  ]);
+  state.matches = matches.matches || [];
+  state.leaderboard = leaderboard.leaderboard || [];
+}
+
+async function refreshPublicDataQuiet() {
+  try {
+    await refreshPublicData();
+    render();
+  } catch {
+    // Keep UI alive if ESPN or local network is unavailable.
+  }
+}
+
+async function refreshPrivateData() {
+  if (!state.me) return;
+  const [predictions, walletHistory, notifications] = await Promise.all([
+    api('/api/predictions/me'),
+    api('/api/wallet/history'),
+    api('/api/notifications?limit=20')
+  ]);
+  state.predictions = predictions.predictions || [];
+  state.walletHistory = walletHistory.history || [];
+  state.notifications = notifications.notifications || [];
+}
+
+async function loadRouteData() {
+  const [name, id] = routeParts();
+  state.detail = null;
+  state.chat = [];
+  if (name === 'match' && id) {
+    state.matchMarketType = 'all';
+    const detail = await api(`/api/matches/${encodeURIComponent(id)}`);
+    state.detail = detail.match;
+    state.chat = detail.chat || [];
+  }
+  if (name === 'profile' && state.me) {
+    await refreshPrivateData();
+  }
+  if (name === 'admin' && state.me?.role === 'admin') {
+    await loadAdminData();
+  }
+}
+
+async function loadAdminData() {
+  const [users, transactions, config, matches, predictions] = await Promise.all([
+    api('/api/admin/users'),
+    api('/api/admin/transactions'),
+    api('/api/admin/config'),
+    api('/api/admin/matches'),
+    api('/api/admin/predictions?status=pending')
+  ]);
+  state.admin = {
+    users: users.users || [],
+    transactions: transactions.transactions || [],
+    settings: config.settings || {},
+    matches: matches.matches || [],
+    predictions: predictions.predictions || []
+  };
+}
+
+function openStream() {
+  if (state.stream) {
+    state.stream.close();
+    state.stream = null;
+  }
+  const token = getToken();
+  if (!token) return;
+  const stream = new EventSource(`/api/stream?token=${encodeURIComponent(token)}`);
+  stream.addEventListener('matches.updated', refreshFromStream);
+  stream.addEventListener('leaderboard.updated', refreshFromStream);
+  stream.addEventListener('wallet.updated', refreshFromStream);
+  stream.addEventListener('chat.message', refreshFromStream);
+  stream.addEventListener('chat.deleted', refreshFromStream);
+  stream.onerror = () => {};
+  state.stream = stream;
+}
+
+async function refreshFromStream(event) {
+  try {
+    await refreshPublicData();
+    if (state.me) await refreshPrivateData();
+    if (routeName() === 'match') await loadRouteData();
+    if (routeName() === 'admin' && state.me?.role === 'admin') await loadAdminData();
+    render();
+  } catch {
+    // Event stream is a fast path, not a blocker.
+  }
+}
+
+function bindEvents() {
+  window.addEventListener('hashchange', async () => {
+    await loadRouteData().catch((error) => setToast(error.message, 'bad'));
+    render();
+  });
+
+  document.addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-action]');
+    if (!button) return;
+    const action = button.dataset.action;
+    if (action === 'market-filter') {
+      state.matchMarketType = button.dataset.marketType || 'all';
+      render();
+      return;
+    }
+    if (action === 'stake-preset') {
+      event.preventDefault();
+      const form = button.closest('form');
+      const stakeInput = form?.querySelector('input[name="betPoints"]');
+      if (stakeInput) {
+        const max = Number(stakeInput.max || 0);
+        const raw = button.dataset.amount === 'max' ? max : Number(button.dataset.amount || 0);
+        const next = Math.max(1, Math.min(max || raw || 1, raw || max || 1));
+        stakeInput.value = String(next);
+        const matchId = form.querySelector('input[name="matchId"]')?.value;
+        if (matchId) {
+          state.betDrafts[String(matchId)] = {
+            ...(state.betDrafts[String(matchId)] || {}),
+            stake: next
+          };
+        }
+        updateBetPreview(form);
+      }
+      return;
+    }
+    if (action === 'logout') {
+      clearToken();
+      state.me = null;
+      state.predictions = [];
+      state.walletHistory = [];
+      state.betDrafts = {};
+      if (state.stream) state.stream.close();
+      window.location.hash = '#/home';
+      render();
+      return;
+    }
+    if (action === 'refresh') {
+      await runTask(async () => {
+        await refreshPublicData();
+        if (state.me) await refreshPrivateData();
+        await loadRouteData();
+      }, 'Refreshed');
+      return;
+    }
+    if (action === 'period') {
+      state.leaderboardPeriod = button.dataset.period || 'all-time';
+      await runTask(refreshPublicData, 'Leaderboard updated');
+      return;
+    }
+    if (action === 'sync') {
+      await runTask(async () => {
+        await api('/api/admin/sync', { method: 'POST', body: { mode: 'fixtures' } });
+        await refreshPublicData();
+        await loadAdminData();
+      }, 'ESPN synced');
+      return;
+    }
+    if (action === 'ban' || action === 'unban') {
+      await runTask(async () => {
+        await api(`/api/admin/users/${button.dataset.userId}/${action}`, { method: 'PATCH', body: {} });
+        await loadAdminData();
+        await refreshPublicData();
+      }, 'User updated');
+      return;
+    }
+    if (action === 'toggle-role') {
+      await runTask(async () => {
+        await api(`/api/admin/users/${button.dataset.userId}/role`, {
+          method: 'PATCH',
+          body: { role: button.dataset.roleTarget }
+        });
+        await loadAdminData();
+        await refreshPublicData();
+      }, 'Role updated');
+      return;
+    }
+    if (action === 'reset-user') {
+      await runTask(async () => {
+        await api(`/api/admin/users/${button.dataset.userId}/reset`, { method: 'POST', body: {} });
+        await loadAdminData();
+        await refreshPublicData();
+      }, 'Wallet reset');
+      return;
+    }
+    if (action === 'delete-chat') {
+      await runTask(async () => {
+        await api(`/api/chat/${button.dataset.messageId}`, { method: 'DELETE' });
+        await loadRouteData();
+      }, 'Message deleted');
+      return;
+    }
+    if (action === 'settle-prediction') {
+      await runTask(async () => {
+        await api(`/api/admin/predictions/${button.dataset.predictionId}/settle`, {
+          method: 'POST',
+          body: { outcome: button.dataset.outcome }
+        });
+        await loadAdminData();
+        await refreshPrivateData();
+      }, 'Prediction settled');
+    }
+  });
+
+  document.addEventListener('input', (event) => {
+    const predictionForm = event.target.closest('[data-form="prediction"]');
+    if (predictionForm && (event.target.name === 'betPoints' || event.target.name === 'pick')) {
+      if (event.target.name === 'pick') {
+        const [marketKey, optionKey] = String(event.target.value || '').split('|');
+        const matchId = predictionForm.querySelector('input[name="matchId"]')?.value;
+        if (matchId && marketKey && optionKey) {
+          state.betDrafts[String(matchId)] = {
+            ...(state.betDrafts[String(matchId)] || {}),
+            marketKey,
+            optionKey
+          };
+        }
+      } else if (event.target.name === 'betPoints') {
+        const matchId = predictionForm.querySelector('input[name="matchId"]')?.value;
+        const stake = Number(event.target.value || 0);
+        if (matchId) {
+          state.betDrafts[String(matchId)] = {
+            ...(state.betDrafts[String(matchId)] || {}),
+            stake
+          };
+        }
+      }
+      updateBetPreview(predictionForm);
+    }
+    const field = event.target.closest('[data-filter]');
+    if (!field) return;
+    state.filters[field.dataset.filter] = field.value;
+  });
+
+  document.addEventListener('change', async (event) => {
+    const roleSelect = event.target.closest('[data-role-select]');
+    if (roleSelect) {
+      await runTask(async () => {
+        await api(`/api/admin/users/${roleSelect.dataset.userId}/role`, {
+          method: 'PATCH',
+          body: { role: roleSelect.value }
+        });
+        await loadAdminData();
+        await refreshPublicData();
+      }, 'Role updated');
+      return;
+    }
+
+    const predictionForm = event.target.closest('[data-form="prediction"]');
+    if (predictionForm && (event.target.name === 'betPoints' || event.target.name === 'pick')) {
+      if (event.target.name === 'pick') {
+        const [marketKey, optionKey] = String(event.target.value || '').split('|');
+        const matchId = predictionForm.querySelector('input[name="matchId"]')?.value;
+        if (matchId && marketKey && optionKey) {
+          state.betDrafts[String(matchId)] = {
+            ...(state.betDrafts[String(matchId)] || {}),
+            marketKey,
+            optionKey
+          };
+        }
+      } else if (event.target.name === 'betPoints') {
+        const matchId = predictionForm.querySelector('input[name="matchId"]')?.value;
+        const stake = Number(event.target.value || 0);
+        if (matchId) {
+          state.betDrafts[String(matchId)] = {
+            ...(state.betDrafts[String(matchId)] || {}),
+            stake
+          };
+        }
+      }
+      updateBetPreview(predictionForm);
+    }
+    const field = event.target.closest('[data-filter]');
+    if (!field) return;
+    state.filters[field.dataset.filter] = field.value;
+    await runTask(refreshPublicData, 'Filters applied', false);
+  });
+
+  document.addEventListener('submit', async (event) => {
+    const form = event.target;
+    if (!form.dataset.form) return;
+    event.preventDefault();
+    const body = Object.fromEntries(new FormData(form).entries());
+    if (form.dataset.form === 'login') {
+      await runTask(async () => {
+        const data = await api('/api/auth/login', {
+          method: 'POST',
+          body: { ...body, remember: body.remember === 'on' }
+        });
+        setToken(data.token);
+        state.me = data.user;
+        state.betDrafts = {};
+        await refreshPrivateData();
+        await refreshPublicData();
+        openStream();
+        window.location.hash = '#/home';
+      }, 'Logged in');
+      return;
+    }
+    if (form.dataset.form === 'register') {
+      await runTask(async () => {
+        const data = await api('/api/auth/register', {
+          method: 'POST',
+          body: { ...body, remember: true }
+        });
+        setToken(data.token);
+        state.me = data.user;
+        state.betDrafts = {};
+        await refreshPrivateData();
+        await refreshPublicData();
+        openStream();
+        window.location.hash = '#/home';
+      }, 'Registered');
+      return;
+    }
+    if (form.dataset.form === 'prediction') {
+      await runTask(async () => {
+        const [marketKey, optionKey] = String(body.pick || '').split('|');
+        await api('/api/predictions', {
+          method: 'POST',
+          body: {
+            matchId: body.matchId,
+            marketKey,
+            optionKey,
+            betPoints: body.betPoints
+          }
+        });
+        delete state.betDrafts[String(body.matchId)];
+        await refreshPrivateData();
+        await refreshPublicData();
+        await loadRouteData();
+      }, 'Bet saved');
+      return;
+    }
+    if (form.dataset.form === 'chat') {
+      await runTask(async () => {
+        await api('/api/chat/send', { method: 'POST', body });
+        form.reset();
+        await loadRouteData();
+      }, 'Message sent');
+      return;
+    }
+    if (form.dataset.form === 'admin-points') {
+      await runTask(async () => {
+        const amount = Number(body.amount || 0) * (body.mode === 'deduct' ? -1 : 1);
+        await api(`/api/admin/users/${body.userId}/points`, {
+          method: 'POST',
+          body: { amount, note: body.note }
+        });
+        form.reset();
+        await loadAdminData();
+        await refreshPublicData();
+      }, 'Points updated');
+      return;
+    }
+    if (form.dataset.form === 'admin-config') {
+      await runTask(async () => {
+        await api('/api/admin/config', {
+          method: 'POST',
+          body: {
+            multipliers: {
+              win: Number(body.win),
+              exact: Number(body.exact),
+              draw: Number(body.draw)
+            },
+            initialBalance: Number(body.initialBalance),
+            maxBetPercent: Number(body.maxBetPercent),
+            predictionLockMinutes: Number(body.predictionLockMinutes),
+            featureLeague: body.featureLeague
+          }
+        });
+        await loadAdminData();
+      }, 'Config saved');
+    }
+  });
+}
+
+async function runTask(task, successMessage, showSuccess = true) {
+  state.busy = true;
+  render();
+  try {
+    await task();
+    if (showSuccess) setToast(successMessage, 'good');
+  } catch (error) {
+    const message = error instanceof ApiError ? error.message : 'Action failed';
+    setToast(message, 'bad');
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+function render() {
+  renderNav();
+  renderTopActions();
+  const page = routeName();
+  const app = document.getElementById('app');
+  if (page === 'auth') app.innerHTML = renderAuthPage();
+  else if (page === 'leaderboard') app.innerHTML = renderLeaderboardPage();
+  else if (page === 'profile') app.innerHTML = renderProfilePage();
+  else if (page === 'match') app.innerHTML = renderMatchPage();
+  else if (page === 'admin') app.innerHTML = renderAdminPage();
+  else app.innerHTML = renderHomePage();
+}
+
+function renderNav() {
+  const page = routeName();
+  const items = [
+    ['home', 'Home', '#/home'],
+    ['leaderboard', 'Leaderboard', '#/leaderboard']
+  ];
+  if (state.me) items.push(['profile', 'Profile', '#/profile']);
+  if (state.me?.role === 'admin') items.push(['admin', 'Admin', '#/admin']);
+  document.getElementById('nav').innerHTML = items
+    .map(([key, label, href]) => `<a class="${page === key ? 'active' : ''}" href="${href}">${label}</a>`)
+    .join('');
+}
+
+function renderTopActions() {
+  const top = document.getElementById('topActions');
+  const liveCount = state.matches.filter((match) => match.isLive || match.status === 'in').length;
+  const busy = state.busy ? '<span class="mini-loader"></span>' : '';
+  if (!state.me) {
+    top.innerHTML = `
+      <span class="chip live-dot">${formatNumber(liveCount)} live</span>
+      <button class="icon-button" data-action="refresh" title="Refresh">↻</button>
+      <a class="primary-link" href="#/auth">Login</a>
+    `;
+    return;
+  }
+  top.innerHTML = `
+    ${busy}
+    <span class="chip live-dot">${formatNumber(liveCount)} live</span>
+    <span class="chip">${formatNumber(state.me.points)} pts</span>
+    <button class="icon-button" data-action="refresh" title="Refresh">↻</button>
+    <button class="ghost-button" data-action="logout">Logout</button>
+  `;
+}
+
+function renderHomePage() {
+  const live = state.matches.filter((match) => match.isLive || match.status === 'in').slice(0, 4);
+  const upcoming = state.matches.filter((match) => !match.isFinal && !match.isLive && match.status !== 'post').slice(0, 8);
+  const hot = [...state.matches].sort((a, b) => Number(b.hotScore || 0) - Number(a.hotScore || 0)).slice(0, 4);
+  return `
+    ${renderToast()}
+    <section class="hero">
+      <div>
+        <p class="eyebrow">ESPN public scoreboard</p>
+        <h1>Pick football lines with friends, using virtual points only.</h1>
+        <p class="hero-copy">No payment, no cash-out, no real-money flow. Bets are locked before kickoff and settled from match result.</p>
+      </div>
+      <div class="hero-stats">
+        <span><b>${formatNumber(state.matches.length)}</b> matches</span>
+        <span><b>${formatNumber(state.leaderboard.length)}</b> players</span>
+        <span><b>${state.me ? formatNumber(state.me.points) : '0'}</b> my points</span>
+      </div>
+    </section>
+    <section class="toolbar">
+      <select data-filter="league">${LEAGUES.map((league) => `<option value="${league.value}" ${state.filters.league === league.value ? 'selected' : ''}>${league.label}</option>`).join('')}</select>
+      <select data-filter="status">
+        <option value="all" ${state.filters.status === 'all' ? 'selected' : ''}>All status</option>
+        <option value="live" ${state.filters.status === 'live' ? 'selected' : ''}>Live</option>
+        <option value="upcoming" ${state.filters.status === 'upcoming' ? 'selected' : ''}>Upcoming</option>
+        <option value="final" ${state.filters.status === 'final' ? 'selected' : ''}>Final</option>
+      </select>
+      <input type="date" data-filter="date" value="${escapeHtml(state.filters.date)}" />
+      <input type="search" data-filter="q" placeholder="Search team" value="${escapeHtml(state.filters.q)}" />
+      <button class="secondary-button" data-action="refresh">Refresh</button>
+    </section>
+    <section class="grid two">
+      <div class="panel">
+        <div class="section-head"><h2>Live scores</h2><span>${formatNumber(live.length)}</span></div>
+        ${renderMatchList(live)}
+      </div>
+      <div class="panel">
+        <div class="section-head"><h2>Leaderboard</h2><a href="#/leaderboard">View all</a></div>
+        ${renderLeaderboardMini()}
+      </div>
+    </section>
+    <section class="grid two">
+      <div class="panel">
+        <div class="section-head"><h2>Upcoming matches</h2><span>${formatNumber(upcoming.length)}</span></div>
+        ${renderMatchList(upcoming)}
+      </div>
+      <div class="panel">
+        <div class="section-head"><h2>Hot matches</h2><span>${formatNumber(hot.length)}</span></div>
+        ${renderMatchList(hot)}
+      </div>
+    </section>
+    ${state.me ? renderNotifications() : ''}
+  `;
+}
+
+function renderMatchList(matches) {
+  if (!matches.length) return `<div class="empty">No matches found.</div>`;
+  return `<div class="match-list">${matches.map(renderMatchCard).join('')}</div>`;
+}
+
+function renderMatchCard(match) {
+  return `
+    <a class="match-card" href="#/match/${match.id}">
+      <span class="badge ${statusClass(match)}">${escapeHtml(statusLabel(match))}</span>
+      <div class="match-league">${escapeHtml(match.leagueLabel || match.league)}</div>
+      <div class="teams">
+        ${renderTeam(match.homeTeam, match.homeLogo)}
+        <strong class="score">${escapeHtml(scoreLine(match))}</strong>
+        ${renderTeam(match.awayTeam, match.awayLogo)}
+      </div>
+      <div class="match-meta">
+        <span>${escapeHtml(formatDateTime(match.kickoffTime))}</span>
+        <span>${match.locked ? 'Locked' : 'Open'}</span>
+      </div>
+      ${match.userPrediction ? `<div class="prediction-pill">${escapeHtml(predictionStatus(match.userPrediction))}</div>` : ''}
+    </a>
+  `;
+}
+
+function renderTeam(name, logo) {
+  return `
+    <span class="team">
+      ${logo ? `<img src="${escapeHtml(logo)}" alt="" />` : `<span class="avatar">${escapeHtml(initials(name))}</span>`}
+      <span>${escapeHtml(name)}</span>
+    </span>
+  `;
+}
+
+function renderLeaderboardMini() {
+  if (!state.leaderboard.length) return `<div class="empty">No players yet.</div>`;
+  return `<div class="rank-list">${state.leaderboard.slice(0, 6).map(renderRankRow).join('')}</div>`;
+}
+
+function renderRankRow(row) {
+  return `
+    <div class="rank-row">
+      <b>#${row.rank}</b>
+      <span class="avatar">${escapeHtml(initials(row.username))}</span>
+      <span>${escapeHtml(row.username)}</span>
+      <strong>${formatNumber(row.points)} pts</strong>
+    </div>
+  `;
+}
+
+function renderLeaderboardPage() {
+  return `
+    ${renderToast()}
+    <section class="page-head">
+      <div><p class="eyebrow">Competition</p><h1>Leaderboard</h1></div>
+      <div class="segmented">
+        ${['all-time', 'week', 'month'].map((period) => `<button class="${state.leaderboardPeriod === period ? 'active' : ''}" data-action="period" data-period="${period}">${period}</button>`).join('')}
+      </div>
+    </section>
+    <section class="panel">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Rank</th><th>User</th><th>Points</th><th>Accuracy</th><th>Matches</th></tr></thead>
+          <tbody>
+            ${state.leaderboard.map((row) => `
+              <tr>
+                <td>#${row.rank}</td>
+                <td><span class="cell-user"><span class="avatar">${escapeHtml(initials(row.username))}</span>${escapeHtml(row.username)}</span></td>
+                <td>${formatNumber(state.leaderboardPeriod === 'all-time' ? row.points : row.periodPoints)}</td>
+                <td>${row.accuracy}%</td>
+                <td>${formatNumber(row.predictions)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function renderMatchPage() {
+  const [, id] = routeParts();
+  const match = state.detail || state.matches.find((item) => String(item.id) === String(id));
+  if (!match) return `${renderToast()}<div class="empty page-empty">Match not found.</div>`;
+  return `
+    ${renderToast()}
+    <section class="match-hero">
+      <div>
+        <p class="eyebrow">${escapeHtml(match.leagueLabel || match.league)}</p>
+        <h1>${escapeHtml(match.homeTeam)} vs ${escapeHtml(match.awayTeam)}</h1>
+        <p>${escapeHtml(formatDateTime(match.kickoffTime))} ${match.venue ? ` - ${escapeHtml(match.venue)}` : ''}</p>
+      </div>
+      <div class="big-score">
+        <span>${formatNumber(match.homeScore)}</span>
+        <b>${match.status === 'pre' && !match.isLive ? 'vs' : '-'}</b>
+        <span>${formatNumber(match.awayScore)}</span>
+      </div>
+      <span class="badge ${statusClass(match)}">${escapeHtml(statusLabel(match))}</span>
+    </section>
+    <section class="grid two">
+      <div class="panel">
+        <div class="section-head"><h2>Bảng cược</h2><span>${match.locked ? 'Khóa' : 'Mở'}</span></div>
+        ${renderPredictionBoxGrouped(match)}
+      </div>
+      <div class="panel">
+        <div class="section-head"><h2>Chat phòng</h2><span>${formatNumber(state.chat.length)}</span></div>
+        ${renderChat(match)}
+      </div>
+    </section>
+  `;
+}
+
+function renderPredictionBoxGrouped(match) {
+  if (!state.me) {
+    return `<div class="empty">Đăng nhập để đặt kèo. <a href="#/auth">Đăng nhập</a></div>`;
+  }
+  const placed = match.userPredictions || (match.userPrediction ? [match.userPrediction] : []);
+  if (match.locked) return `${renderPlacedBetsGrouped(placed)}<div class="empty">Cửa cược đã đóng.</div>`;
+  const maxBet = Math.max(1, Math.floor(Number(state.me.walletBalance || state.me.points || 0) * 0.25));
+  const markets = Array.isArray(match.markets) ? match.markets : [];
+  if (!markets.length) {
+    return `
+      ${renderPlacedBetsGrouped(placed)}
+      <div class="empty">Chưa có odds từ ESPN cho trận này.</div>
+    `;
+  }
+  const sections = buildMarketSections(markets);
+  const visibleSections = state.matchMarketType === 'all'
+    ? sections
+    : sections.filter((section) => section.key === state.matchMarketType);
+  const activeMarkets = visibleSections.flatMap((section) => section.markets);
+  const draft = state.betDrafts[String(match.id)] || {};
+  const defaultPick = findDraftPick(match.id, activeMarkets.length ? activeMarkets : markets) || findFirstPick(activeMarkets.length ? activeMarkets : markets);
+  const stakeValue = Math.max(1, Math.min(maxBet, Number(draft.stake || 100)));
+  const canSubmit = Boolean(defaultPick);
+  return `
+    ${renderPlacedBetsGrouped(placed)}
+    <form class="bet-form" data-form="prediction">
+      <input type="hidden" name="matchId" value="${match.id}" />
+      <div class="bet-meta">
+        <span class="chip">${formatNumber(markets.length)} kèo</span>
+        <span class="chip">Tối đa ${formatNumber(maxBet)} điểm</span>
+        <span class="chip">Điểm ảo</span>
+      </div>
+      <div class="bet-preview" data-bet-preview>
+        <div>
+          <b data-preview-title>${escapeHtml(defaultPick?.market?.title || 'Chưa chọn kèo')}</b>
+          <span data-preview-label>${escapeHtml(defaultPick?.option?.label || 'Chọn field bên dưới')}</span>
+        </div>
+        <div class="bet-preview-stats">
+          <strong data-preview-odds>${escapeHtml(renderOddsValue(defaultPick?.option?.odds))}</strong>
+          <span data-preview-return>${escapeHtml(renderBetProjection(stakeValue, defaultPick?.option?.odds))}</span>
+        </div>
+      </div>
+      <div class="market-tabs" role="tablist" aria-label="Market filters">
+        ${renderMarketFilters(sections)}
+      </div>
+      <div class="market-board">
+        ${visibleSections.map((section, index) => renderMarketSection(section, index === 0, defaultPick)).join('')}
+      </div>
+      <div class="stake-row">
+        <label>Điểm cược<input name="betPoints" type="number" min="1" max="${maxBet}" value="${stakeValue}" required /></label>
+        <div class="stake-pills">
+          ${[25, 50, 100].filter((amount) => amount <= maxBet).map((amount) => `<button type="button" class="chip" data-action="stake-preset" data-amount="${amount}">${formatNumber(amount)}</button>`).join('')}
+          <button type="button" class="chip" data-action="stake-preset" data-amount="max">Max</button>
+        </div>
+        <button class="primary-button" type="submit" ${canSubmit ? '' : 'disabled'}>Đặt kèo</button>
+      </div>
+      <div class="market-note">x1.76 nghĩa là cược 100, nhận 176. +340 hoặc 5/7 chỉ là kiểu ghi odds khác, app đổi hết sang x để dễ đọc.</div>
+    </form>
+  `;
+}
+
+function renderPlacedBetsGrouped(predictions) {
+  if (!predictions.length) return '';
+  return `
+    <div class="placed-bets">
+      ${predictions.map((prediction) => `
+        <div class="placed-bet">
+          <div>
+            <b>${escapeHtml(prediction.market?.title || 'Kèo cũ')}</b>
+            <span>${escapeHtml(prediction.market?.label || `${prediction.predictedHomeScore}-${prediction.predictedAwayScore}`)} @ ${escapeHtml(renderOddsLabelGrouped(prediction.market))}</span>
+          </div>
+          <strong>${escapeHtml(predictionStatus(prediction))}</strong>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderMarketFilters(sections) {
+  const filters = [
+    {
+      key: 'all',
+      label: 'Tất cả',
+      count: sections.reduce((total, section) => total + section.markets.length, 0)
+    },
+    ...sections.map((section) => ({
+      key: section.key,
+      label: section.label,
+      count: section.markets.length
+    }))
+  ];
+  return filters.map((filter) => `
+    <button
+      type="button"
+      class="market-tab ${state.matchMarketType === filter.key ? 'active' : ''}"
+      data-action="market-filter"
+      data-market-type="${filter.key}"
+      aria-pressed="${state.matchMarketType === filter.key ? 'true' : 'false'}"
+    >
+      <span>${escapeHtml(filter.label)}</span>
+      <small>${formatNumber(filter.count)}</small>
+    </button>
+  `).join('');
+}
+
+function renderMarketSection(section, open = false, defaultPick = null) {
+  const hasDefaultPick = defaultPick && section.markets.some((market) => market.key === defaultPick.marketKey);
+  return `
+    <details class="market-group" ${open ? 'open' : ''}>
+      <summary>
+        <div>
+          <b>${escapeHtml(section.label)}</b>
+          <span>${formatNumber(section.markets.length)} kèo · ${formatNumber(section.providers.length)} nhà cung cấp</span>
+        </div>
+        <span class="group-arrow">⌄</span>
+      </summary>
+      <div class="market-group-body">
+        ${section.markets.map((market) => renderMarket(market, hasDefaultPick ? defaultPick : null)).join('')}
+      </div>
+    </details>
+  `;
+}
+
+function renderMarket(market, defaultPick = null) {
+  if (market.disabled) {
+    return `
+      <div class="market disabled">
+        <div class="market-title"><b>${escapeHtml(market.title)}</b><span>Chưa mở</span></div>
+        <p>${escapeHtml(market.description)}</p>
+      </div>
+    `;
+  }
+  return `
+    <div class="market">
+      <div class="market-title"><b>${escapeHtml(market.title)}</b><span>${escapeHtml(market.description)}</span></div>
+      <div class="market-options">
+        ${market.options.map((option) => {
+          const checked = defaultPick && market.key === defaultPick.marketKey && option.key === defaultPick.optionKey ? 'checked' : '';
+          return `
+            <label class="market-option">
+              <input
+                type="radio"
+                name="pick"
+                value="${escapeHtml(`${market.key}|${option.key}`)}"
+                ${checked}
+                required
+                data-market-title="${escapeHtml(market.title)}"
+                data-option-label="${escapeHtml(option.label)}"
+                data-odds="${escapeHtml(String(option.odds ?? ''))}"
+              />
+              <span>${escapeHtml(option.label)}</span>
+              <b>${escapeHtml(renderOddsValue(option.odds))}</b>
+            </label>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderOddsLabelGrouped(source) {
+  return renderOddsValue(source?.odds);
+}
+
+function renderChat(match) {
+  return `
+    <div class="chat-list">
+      ${state.chat.length ? state.chat.map((message) => `
+        <div class="chat-message">
+          <span class="avatar">${escapeHtml(initials(message.user?.username || 'User'))}</span>
+          <div>
+            <b>${escapeHtml(message.user?.username || 'User')}</b>
+            <p>${escapeHtml(message.message)}</p>
+          </div>
+          ${state.me?.role === 'admin' ? `<button class="icon-button danger" data-action="delete-chat" data-message-id="${message.id}" title="Delete">X</button>` : ''}
+        </div>
+      `).join('') : '<div class="empty">No messages yet.</div>'}
+    </div>
+    ${state.me ? `
+      <form class="chat-form" data-form="chat">
+        <input type="hidden" name="matchId" value="${match.id}" />
+        <input name="message" maxlength="280" placeholder="Type message" required />
+        <button class="secondary-button" type="submit">Send</button>
+      </form>
+    ` : '<div class="empty">Login to chat.</div>'}
+  `;
+}
+
+function renderProfilePage() {
+  if (!state.me) return `${renderToast()}<section class="panel"><div class="empty">Login to view profile. <a href="#/auth">Login</a></div></section>`;
+  const rank = state.leaderboard.find((row) => String(row.id) === String(state.me.id));
+  return `
+    ${renderToast()}
+    <section class="page-head">
+      <div><p class="eyebrow">Profile</p><h1>${escapeHtml(state.me.username)}</h1></div>
+      <span class="avatar xl">${escapeHtml(initials(state.me.username))}</span>
+    </section>
+    <section class="stats-grid">
+      <div class="stat"><span>Points</span><b>${formatNumber(state.me.points)}</b></div>
+      <div class="stat"><span>Rank</span><b>${rank ? `#${rank.rank}` : '-'}</b></div>
+      <div class="stat"><span>Bets</span><b>${formatNumber(state.predictions.length)}</b></div>
+      <div class="stat"><span>Transactions</span><b>${formatNumber(state.walletHistory.length)}</b></div>
+    </section>
+    <section class="grid two">
+      <div class="panel">
+        <div class="section-head"><h2>Bet history</h2></div>
+        ${renderPredictionsTableGrouped()}
+      </div>
+      <div class="panel">
+        <div class="section-head"><h2>Wallet history</h2></div>
+        ${renderWalletHistory()}
+      </div>
+    </section>
+  `;
+}
+
+function renderPredictionsTableGrouped() {
+  if (!state.predictions.length) return `<div class="empty">No bets yet.</div>`;
+  return `<div class="stack-list">${state.predictions.slice(0, 12).map((prediction) => `
+    <div class="history-row">
+      <div>
+        <b>${escapeHtml(prediction.match ? `${prediction.match.homeTeam} vs ${prediction.match.awayTeam}` : `Match #${prediction.matchId}`)}</b>
+        <span>${escapeHtml(prediction.market?.title || 'Kèo cũ')} | ${escapeHtml(prediction.market?.label || `${prediction.predictedHomeScore}-${prediction.predictedAwayScore}`)} | ${escapeHtml(renderOddsLabelGrouped(prediction.market))} | ${escapeHtml(prediction.status)}</span>
+      </div>
+      <strong>${formatNumber(prediction.rewardPoints)} pts</strong>
+    </div>
+  `).join('')}</div>`;
+}
+
+function renderWalletHistory() {
+  if (!state.walletHistory.length) return `<div class="empty">No transactions yet.</div>`;
+  return `<div class="stack-list">${state.walletHistory.slice(0, 12).map((tx) => `
+    <div class="history-row">
+      <div>
+        <b>${escapeHtml(tx.type)}</b>
+        <span>${escapeHtml(clampText(tx.note))}</span>
+      </div>
+      <strong class="${Number(tx.amount) >= 0 ? 'good' : 'bad'}">${Number(tx.amount) >= 0 ? '+' : ''}${formatNumber(tx.amount)}</strong>
+    </div>
+  `).join('')}</div>`;
+}
+
+function renderPredictionsTable() {
+  if (!state.predictions.length) return `<div class="empty">No bets yet.</div>`;
+  return `<div class="stack-list">${state.predictions.slice(0, 12).map((prediction) => `
+    <div class="history-row">
+      <div>
+        <b>${escapeHtml(prediction.match ? `${prediction.match.homeTeam} vs ${prediction.match.awayTeam}` : `Match #${prediction.matchId}`)}</b>
+        <span>${escapeHtml(prediction.market?.title || 'Kèo cũ')} | ${escapeHtml(prediction.market?.label || '')} | ${escapeHtml(prediction.status)} | ${escapeHtml(renderOddsLabelGrouped(prediction.market))}</span>
+      </div>
+      <strong>${formatNumber(prediction.rewardPoints)} pts</strong>
+    </div>
+  `).join('')}</div>`;
+}
+
+function renderAdminPage() {
+  if (!state.me) return `${renderToast()}<div class="empty page-empty">Login required.</div>`;
+  if (state.me.role !== 'admin') return `${renderToast()}<div class="empty page-empty">Admin only.</div>`;
+  if (!state.admin) return `${renderToast()}<div class="empty page-empty">Loading admin data.</div>`;
+  return `
+    ${renderToast()}
+    <section class="page-head">
+      <div><p class="eyebrow">Control room</p><h1>Admin dashboard</h1></div>
+      <button class="primary-button" data-action="sync">Force ESPN sync</button>
+    </section>
+    <section class="panel">
+      <div class="section-head"><h2>Point adjustment</h2></div>
+      <form class="form-grid" data-form="admin-points">
+        <label>User<select name="userId" required>${state.admin.users.map((user) => `<option value="${user.id}">${escapeHtml(user.username)} (${formatNumber(user.points)} pts)</option>`).join('')}</select></label>
+        <label>Mode<select name="mode"><option value="add">Add</option><option value="deduct">Deduct</option></select></label>
+        <label>Amount<input name="amount" type="number" min="1" value="100" required /></label>
+        <label>Note<input name="note" maxlength="120" placeholder="Admin adjustment" /></label>
+        <button class="secondary-button" type="submit">Update points</button>
+      </form>
+    </section>
+    <section class="panel">
+      <div class="section-head"><h2>Users</h2><span>${formatNumber(state.admin.users.length)}</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>User</th><th>Role</th><th>Points</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>${state.admin.users.map((user) => `
+            <tr>
+              <td>${escapeHtml(user.username)}</td>
+              <td>
+                <select class="role-select" data-role-select data-user-id="${user.id}" ${String(user.id) === String(state.me.id) ? 'disabled' : ''}>
+                  <option value="user" ${user.role === 'user' ? 'selected' : ''}>user</option>
+                  <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>admin</option>
+                </select>
+              </td>
+              <td>${formatNumber(user.points)}</td>
+              <td>${user.banned ? 'Banned' : 'Active'}</td>
+              <td class="actions">
+                <button class="ghost-button" data-action="${user.banned ? 'unban' : 'ban'}" data-user-id="${user.id}">${user.banned ? 'Unban' : 'Ban'}</button>
+                <button class="ghost-button danger" data-action="reset-user" data-user-id="${user.id}">Reset</button>
+              </td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="section-head"><h2>Recent transactions</h2></div>
+      ${state.admin.transactions.length ? `<div class="stack-list">${state.admin.transactions.slice(0, 20).map((tx) => `
+        <div class="history-row">
+          <div><b>User #${tx.userId} - ${escapeHtml(tx.type)}</b><span>${escapeHtml(tx.note)}</span></div>
+          <strong class="${Number(tx.amount) >= 0 ? 'good' : 'bad'}">${Number(tx.amount) >= 0 ? '+' : ''}${formatNumber(tx.amount)}</strong>
+        </div>
+      `).join('')}</div>` : '<div class="empty">No transactions.</div>'}
+    </section>
+    <section class="panel">
+      <div class="section-head"><h2>Pending bets</h2><span>${formatNumber(state.admin.predictions.length)}</span></div>
+      ${state.admin.predictions.length ? `<div class="stack-list">${state.admin.predictions.map((prediction) => `
+        <div class="history-row">
+          <div>
+            <b>${escapeHtml(prediction.user?.username || `User #${prediction.userId}`)} - ${escapeHtml(prediction.market?.title || 'Bet')}</b>
+            <span>${escapeHtml(prediction.match ? `${prediction.match.homeTeam} vs ${prediction.match.awayTeam}` : `Match #${prediction.matchId}`)} | ${escapeHtml(prediction.market?.label || '')} | ${escapeHtml(renderOddsValue(prediction.market?.odds))} | ${escapeHtml(prediction.status)}</span>
+          </div>
+          <strong>${formatNumber(prediction.rewardPoints)} pts</strong>
+        </div>
+      `).join('')}</div>` : '<div class="empty">No pending bets.</div>'}
+    </section>
+  `;
+}
+
+function renderAuthPage() {
+  return `
+    ${renderToast()}
+    <section class="auth-grid">
+      <div class="panel">
+        <div class="section-head"><h2>Login</h2></div>
+        <form class="form-grid" data-form="login">
+          <label>Email hoặc tên đăng nhập<input name="email" type="text" autocomplete="username" required /></label>
+          <label>Password<input name="password" type="password" required /></label>
+          <label class="check"><input name="remember" type="checkbox" checked /> Remember</label>
+          <button class="primary-button" type="submit">Login</button>
+        </form>
+      </div>
+      <div class="panel">
+        <div class="section-head"><h2>Register</h2></div>
+        <form class="form-grid" data-form="register">
+          <label>Username<input name="username" minlength="2" required /></label>
+          <label>Email<input name="email" type="email" required /></label>
+          <label>Password<input name="password" type="password" minlength="7" required /></label>
+          <label>Avatar URL<input name="avatar" type="url" /></label>
+          <button class="secondary-button" type="submit">Create account</button>
+        </form>
+      </div>
+    </section>
+  `;
+}
+
+function renderNotifications() {
+  return `
+    <section class="panel">
+      <div class="section-head"><h2>Notifications</h2><span>${formatNumber(state.notifications.length)}</span></div>
+      ${state.notifications.length ? `<div class="stack-list">${state.notifications.slice(0, 8).map((item) => `
+        <div class="history-row">
+          <div><b>${escapeHtml(item.title)}</b><span>${escapeHtml(item.message)}</span></div>
+        </div>
+      `).join('')}</div>` : '<div class="empty">No notifications.</div>'}
+    </section>
+  `;
+}
+
+function renderToast() {
+  return state.toast ? `<div class="toast ${state.toast.tone}">${escapeHtml(state.toast.message)}</div>` : '';
+}
+
+boot().catch((error) => {
+  setToast(error.message || 'App failed to start', 'bad');
+  render();
+});
+
