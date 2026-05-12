@@ -1,4 +1,5 @@
 const { leagueCatalog } = require('./config');
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function dateKeyFromDate(date) {
   const y = date.getFullYear();
@@ -517,9 +518,36 @@ async function fetchOddsMarkets(match) {
   return parseOddsMarkets(payload, match);
 }
 
+async function mapWithConcurrency(items, limit, mapper) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const safeLimit = Math.max(1, Number(limit || 1));
+  const results = new Array(items.length);
+  let index = 0;
+
+  async function worker() {
+    while (index < items.length) {
+      const current = index;
+      index += 1;
+      try {
+        const value = await mapper(items[current], current);
+        results[current] = { status: 'fulfilled', value };
+      } catch (reason) {
+        results[current] = { status: 'rejected', reason };
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(safeLimit, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
 async function syncMatches(db, options = {}) {
   const now = new Date();
   const fixtureDates = options.fixtureDates || [0, 1, 2];
+  const fetchConcurrency = Math.max(4, Number(options.fetchConcurrency || 20));
+  const oddsConcurrency = Math.max(2, Number(options.oddsConcurrency || 10));
+  const oddsMaxDays = Math.max(0, Number(options.oddsMaxDays ?? 3));
   const dateKeys = fixtureDates.map((offset) => dateKeyFromDate(addDays(now, offset)));
   const fetched = [];
   const errors = [];
@@ -530,8 +558,10 @@ async function syncMatches(db, options = {}) {
     }
   }
 
-  const results = await Promise.allSettled(
-    tasks.map((task) => fetchLeagueMatches(task.leagueItem, task.dateKey))
+  const results = await mapWithConcurrency(
+    tasks,
+    fetchConcurrency,
+    (task) => fetchLeagueMatches(task.leagueItem, task.dateKey)
   );
   results.forEach((result, index) => {
     const task = tasks[index];
@@ -542,13 +572,28 @@ async function syncMatches(db, options = {}) {
     }
   });
 
-  const oddsResults = await Promise.allSettled(fetched.map((match) => fetchOddsMarkets(match)));
+  fetched.forEach((match) => {
+    match.oddsMarkets = [];
+  });
+
+  const oddsCandidates = fetched.filter((match) => {
+    const kickoff = new Date(match.kickoffTime || 0).getTime();
+    if (!Number.isFinite(kickoff)) return false;
+    const deltaMs = kickoff - now.getTime();
+    return deltaMs <= oddsMaxDays * DAY_MS && deltaMs >= -DAY_MS;
+  });
+
+  const oddsResults = await mapWithConcurrency(
+    oddsCandidates,
+    oddsConcurrency,
+    (match) => fetchOddsMarkets(match)
+  );
   oddsResults.forEach((result, index) => {
+    const match = oddsCandidates[index];
     if (result.status === 'fulfilled') {
-      fetched[index].oddsMarkets = result.value;
+      match.oddsMarkets = result.value;
     } else {
-      fetched[index].oddsMarkets = [];
-      errors.push({ league: fetched[index].league, dateKey: fetched[index].kickoffTime?.slice(0, 10), message: result.reason?.message || 'Odds fetch failed' });
+      errors.push({ league: match.league, dateKey: match.kickoffTime?.slice(0, 10), message: result.reason?.message || 'Odds fetch failed' });
     }
   });
 

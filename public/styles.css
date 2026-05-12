@@ -300,6 +300,23 @@ select:focus {
   gap: 10px;
 }
 
+.league-sections {
+  display: grid;
+  gap: 12px;
+}
+
+.league-section {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #0f171f;
+}
+
+.league-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
 .match-card,
 .rank-row,
 .history-row,

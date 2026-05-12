@@ -46,12 +46,39 @@ const {
 
 const PORT = Number(process.env.PORT || 3000);
 const HEARTBEAT_MS = 25000;
-const REFRESH_LIVE_MS = 30000;
-const REFRESH_FIXTURES_MS = 6 * 60 * 60 * 1000;
+const REFRESH_LIVE_MS = Math.max(10000, Number(process.env.ESPN_LIVE_SYNC_SECONDS || 30) * 1000);
+const REFRESH_FIXTURES_MS = Math.max(60 * 60 * 1000, Number(process.env.ESPN_FIXTURE_SYNC_HOURS || 8) * 60 * 60 * 1000);
+const FIXTURE_RANGE_DAYS = Math.max(0, Number(process.env.ESPN_FIXTURE_RANGE_DAYS || 100));
+const ODDS_RANGE_DAYS = Math.max(0, Number(process.env.ESPN_ODDS_RANGE_DAYS || 20));
+const LIVE_WINDOW_MINUTES = Math.max(15, Number(process.env.ESPN_LIVE_WINDOW_MINUTES || 180));
 
 let db = null;
 
+function buildFixtureOffsets(rangeDays) {
+  const offsets = [];
+  for (let i = 0; i <= rangeDays; i += 1) {
+    offsets.push(i);
+  }
+  return offsets;
+}
+
+function shouldRunLiveSync() {
+  if (!Array.isArray(db?.matches) || db.matches.length === 0) return false;
+  const now = Date.now();
+  const windowMs = LIVE_WINDOW_MINUTES * 60 * 1000;
+  return db.matches.some((match) => {
+    if (match?.isLive || String(match?.status) === 'in') return true;
+    if (match?.isFinal || String(match?.status) === 'post') return false;
+    const kickoff = new Date(match?.kickoffTime || 0).getTime();
+    if (!Number.isFinite(kickoff)) return false;
+    return Math.abs(kickoff - now) <= windowMs;
+  });
+}
+
 function ensureSeedUsers() {
+  if (Array.isArray(db.users) && db.users.length > 0) {
+    return;
+  }
   const now = new Date().toISOString();
   const existingAdmin = db.users.find((user) => user.email === 'admin@demo.local');
   if (!existingAdmin) {
@@ -479,7 +506,9 @@ async function syncFromEspn(mode = 'fixtures') {
   try {
     const result = await syncMatches(
       db,
-      mode === 'live' ? { fixtureDates: [0], allowDemo: false } : { fixtureDates: [0, 1, 2], allowDemo: false }
+      mode === 'live'
+        ? { fixtureDates: [0], oddsMaxDays: 1, allowDemo: false }
+        : { fixtureDates: buildFixtureOffsets(FIXTURE_RANGE_DAYS), oddsMaxDays: ODDS_RANGE_DAYS, allowDemo: false }
     );
     const upserted = upsertMatches(db, result.matches);
     let settledCount = 0;
@@ -1154,6 +1183,7 @@ function handleStream(req, res, urlObj) {
 
 function startTimers() {
   setInterval(() => {
+    if (!shouldRunLiveSync()) return;
     syncFromEspn('live').catch(() => {});
   }, REFRESH_LIVE_MS);
 

@@ -137,6 +137,25 @@ function matchResultSummary(match) {
   return { score: formatDateTime(match.kickoffTime), state: statusLabel(match), tone: 'pending' };
 }
 
+function groupMatchesByLeague(matches, perLeague = 3, maxLeagues = 6) {
+  const groups = new Map();
+  for (const match of matches || []) {
+    const key = match.league || 'other';
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        label: match.leagueLabel || match.league || 'Other',
+        matches: []
+      });
+    }
+    const group = groups.get(key);
+    if (group.matches.length < perLeague) {
+      group.matches.push(match);
+    }
+  }
+  return [...groups.values()].slice(0, maxLeagues);
+}
+
 function betProjection(stake, odds) {
   const bet = Number(stake || 0);
   const d = Number(odds);
@@ -362,8 +381,13 @@ function App() {
 // ─── Home page ────────────────────────────────────────────────────────────────
 function HomePage() {
   const live = state.matches.filter(isMatchLive).slice(0, 4);
-  const upcoming = state.matches.filter(isUpcomingMatch).slice(0, 8);
-  const hot = [...state.matches].sort((a, b) => Number(b.hotScore || 0) - Number(a.hotScore || 0)).slice(0, 4);
+  const upcomingAll = state.matches
+    .filter(isUpcomingMatch)
+    .sort((a, b) => new Date(a.kickoffTime || 0) - new Date(b.kickoffTime || 0));
+  const hotAll = [...state.matches]
+    .sort((a, b) => Number(b.hotScore || 0) - Number(a.hotScore || 0));
+  const upcomingByLeague = groupMatchesByLeague(upcomingAll, 2, 8);
+  const hotByLeague = groupMatchesByLeague(hotAll, 2, 8);
 
   const handleFilterChange = async (key, value) => {
     state.filters[key] = value;
@@ -424,15 +448,29 @@ function HomePage() {
     ),
     e('section', { className: 'grid two' },
       e('div', { className: 'panel' },
-        e('div', { className: 'section-head' }, e('h2', null, 'Upcoming matches'), e('span', null, formatNumber(upcoming.length))),
-        e(MatchList, { matches: upcoming })
+        e('div', { className: 'section-head' }, e('h2', null, 'Upcoming by league'), e('span', null, formatNumber(upcomingAll.length))),
+        e(LeagueMatchSections, { groups: upcomingByLeague, emptyText: 'No upcoming matches.' })
       ),
       e('div', { className: 'panel' },
-        e('div', { className: 'section-head' }, e('h2', null, 'Hot matches'), e('span', null, formatNumber(hot.length))),
-        e(MatchList, { matches: hot })
+        e('div', { className: 'section-head' }, e('h2', null, 'Hot by league'), e('span', null, formatNumber(hotAll.length))),
+        e(LeagueMatchSections, { groups: hotByLeague, emptyText: 'No hot matches.' })
       )
-    ),
-    state.me ? e(NotificationsSection, null) : null
+    )
+  );
+}
+
+function LeagueMatchSections({ groups, emptyText }) {
+  if (!groups.length) return e('div', { className: 'empty' }, emptyText || 'No matches found.');
+  return e('div', { className: 'league-sections' },
+    groups.map(group =>
+      e('section', { key: group.key, className: 'league-section' },
+        e('div', { className: 'section-head league-head' },
+          e('h3', null, group.label),
+          e('span', null, `${formatNumber(group.matches.length)} matches`)
+        ),
+        e(MatchList, { matches: group.matches })
+      )
+    )
   );
 }
 
