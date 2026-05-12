@@ -137,7 +137,7 @@ function matchResultSummary(match) {
   return { score: formatDateTime(match.kickoffTime), state: statusLabel(match), tone: 'pending' };
 }
 
-function groupMatchesByLeague(matches, perLeague = 3, maxLeagues = 6) {
+function groupMatchesByLeague(matches, maxLeagues = 8) {
   const groups = new Map();
   for (const match of matches || []) {
     const key = match.league || 'other';
@@ -149,9 +149,7 @@ function groupMatchesByLeague(matches, perLeague = 3, maxLeagues = 6) {
       });
     }
     const group = groups.get(key);
-    if (group.matches.length < perLeague) {
-      group.matches.push(match);
-    }
+    group.matches.push(match);
   }
   return [...groups.values()].slice(0, maxLeagues);
 }
@@ -380,14 +378,15 @@ function App() {
 
 // ─── Home page ────────────────────────────────────────────────────────────────
 function HomePage() {
+  const [expandedLeagueKey, setExpandedLeagueKey] = React.useState('');
   const live = state.matches.filter(isMatchLive).slice(0, 4);
   const upcomingAll = state.matches
     .filter(isUpcomingMatch)
     .sort((a, b) => new Date(a.kickoffTime || 0) - new Date(b.kickoffTime || 0));
   const hotAll = [...state.matches]
     .sort((a, b) => Number(b.hotScore || 0) - Number(a.hotScore || 0));
-  const upcomingByLeague = groupMatchesByLeague(upcomingAll, 2, 8);
-  const hotByLeague = groupMatchesByLeague(hotAll, 2, 8);
+  const upcomingByLeague = groupMatchesByLeague(upcomingAll, 8);
+  const hotByLeague = groupMatchesByLeague(hotAll, 8);
 
   const handleFilterChange = async (key, value) => {
     state.filters[key] = value;
@@ -449,34 +448,60 @@ function HomePage() {
     e('section', { className: 'grid two' },
       e('div', { className: 'panel' },
         e('div', { className: 'section-head' }, e('h2', null, 'Upcoming by league'), e('span', null, formatNumber(upcomingAll.length))),
-        e(LeagueMatchSections, { groups: upcomingByLeague, emptyText: 'No upcoming matches.' })
+        e(LeagueMatchSections, {
+          sectionId: 'upcoming',
+          groups: upcomingByLeague,
+          previewCount: 2,
+          expandedLeagueKey,
+          onToggleExpand: setExpandedLeagueKey,
+          emptyText: 'No upcoming matches.'
+        })
       ),
       e('div', { className: 'panel' },
         e('div', { className: 'section-head' }, e('h2', null, 'Hot by league'), e('span', null, formatNumber(hotAll.length))),
-        e(LeagueMatchSections, { groups: hotByLeague, emptyText: 'No hot matches.' })
+        e(LeagueMatchSections, {
+          sectionId: 'hot',
+          groups: hotByLeague,
+          previewCount: 2,
+          expandedLeagueKey,
+          onToggleExpand: setExpandedLeagueKey,
+          emptyText: 'No hot matches.'
+        })
       )
     )
   );
 }
 
-function LeagueMatchSections({ groups, emptyText }) {
+function LeagueMatchSections({ sectionId, groups, previewCount = 2, expandedLeagueKey, onToggleExpand, emptyText }) {
   if (!groups.length) return e('div', { className: 'empty' }, emptyText || 'No matches found.');
   return e('div', { className: 'league-sections' },
-    groups.map(group =>
-      e('section', { key: group.key, className: 'league-section' },
+    groups.map(group => {
+      const key = `${sectionId}:${group.key}`;
+      const expanded = expandedLeagueKey === key;
+      const visibleMatches = expanded ? group.matches : group.matches.slice(0, previewCount);
+      return e('section', { key: group.key, className: `league-section${expanded ? ' expanded' : ''}` },
         e('div', { className: 'section-head league-head' },
           e('h3', null, group.label),
-          e('span', null, `${formatNumber(group.matches.length)} matches`)
+          e('div', { className: 'league-head-actions' },
+            e('span', null, `${formatNumber(group.matches.length)} matches`),
+            group.matches.length > previewCount
+              ? e('button', {
+                  type: 'button',
+                  className: 'ghost-button league-toggle',
+                  onClick: () => onToggleExpand(expanded ? '' : key)
+                }, expanded ? 'Thu gọn' : 'Xem tất cả')
+              : null
+          )
         ),
-        e(MatchList, { matches: group.matches })
-      )
-    )
+        e(MatchList, { matches: visibleMatches, compact: !expanded })
+      );
+    })
   );
 }
 
-function MatchList({ matches }) {
+function MatchList({ matches, compact = false }) {
   if (!matches.length) return e('div', { className: 'empty' }, 'No matches found.');
-  return e('div', { className: 'match-list' },
+  return e('div', { className: `match-list${compact ? ' compact-match-list' : ''}` },
     matches.map(match => e(MatchCard, { key: match.id, match }))
   );
 }

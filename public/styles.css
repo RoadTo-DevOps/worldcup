@@ -312,9 +312,40 @@ select:focus {
   background: #0f171f;
 }
 
+.league-section.expanded {
+  border-color: rgba(54, 211, 153, 0.45);
+}
+
 .league-head h3 {
   margin: 0;
   font-size: 15px;
+}
+
+.league-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.league-toggle {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.compact-match-list .match-card {
+  padding: 10px;
+  gap: 8px;
+}
+
+.compact-match-list .teams {
+  gap: 8px;
+}
+
+.compact-match-list .team span:last-child {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .match-card,
