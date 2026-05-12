@@ -379,6 +379,7 @@ function App() {
 // ─── Home page ────────────────────────────────────────────────────────────────
 function HomePage() {
   const [expandedLeagueKey, setExpandedLeagueKey] = React.useState('');
+  const isFocusedLeague = state.filters.league !== 'all';
   const live = state.matches.filter(isMatchLive).slice(0, 4);
   const upcomingAll = state.matches
     .filter(isUpcomingMatch)
@@ -454,6 +455,8 @@ function HomePage() {
           previewCount: 2,
           expandedLeagueKey,
           onToggleExpand: setExpandedLeagueKey,
+          forceShowAll: isFocusedLeague,
+          forceCompact: isFocusedLeague,
           emptyText: 'No upcoming matches.'
         })
       ),
@@ -465,6 +468,8 @@ function HomePage() {
           previewCount: 2,
           expandedLeagueKey,
           onToggleExpand: setExpandedLeagueKey,
+          forceShowAll: isFocusedLeague,
+          forceCompact: isFocusedLeague,
           emptyText: 'No hot matches.'
         })
       )
@@ -472,19 +477,28 @@ function HomePage() {
   );
 }
 
-function LeagueMatchSections({ sectionId, groups, previewCount = 2, expandedLeagueKey, onToggleExpand, emptyText }) {
+function LeagueMatchSections({
+  sectionId,
+  groups,
+  previewCount = 2,
+  expandedLeagueKey,
+  onToggleExpand,
+  forceShowAll = false,
+  forceCompact = false,
+  emptyText
+}) {
   if (!groups.length) return e('div', { className: 'empty' }, emptyText || 'No matches found.');
   return e('div', { className: 'league-sections' },
     groups.map(group => {
       const key = `${sectionId}:${group.key}`;
-      const expanded = expandedLeagueKey === key;
-      const visibleMatches = expanded ? group.matches : group.matches.slice(0, previewCount);
+      const expanded = forceShowAll || expandedLeagueKey === key;
+      const visibleMatches = forceShowAll ? group.matches : (expanded ? group.matches : group.matches.slice(0, previewCount));
       return e('section', { key: group.key, className: `league-section${expanded ? ' expanded' : ''}` },
         e('div', { className: 'section-head league-head' },
           e('h3', null, group.label),
           e('div', { className: 'league-head-actions' },
             e('span', null, `${formatNumber(group.matches.length)} matches`),
-            group.matches.length > previewCount
+            !forceShowAll && group.matches.length > previewCount
               ? e('button', {
                   type: 'button',
                   className: 'ghost-button league-toggle',
@@ -493,7 +507,7 @@ function LeagueMatchSections({ sectionId, groups, previewCount = 2, expandedLeag
               : null
           )
         ),
-        e(MatchList, { matches: visibleMatches, compact: !expanded })
+        e(MatchList, { matches: visibleMatches, compact: forceCompact || !expanded })
       );
     })
   );
