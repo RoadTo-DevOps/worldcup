@@ -24,7 +24,6 @@ const defaultSettings = {
     exact: 2,
     draw: 1.8
   },
-  maxBetPercent: 0.25,
   predictionLockMinutes: 5,
   featureLeague: 'eng.1'
 };

@@ -612,14 +612,14 @@ function PlacedBets({ predictions }) {
 // ─── Bet form ─────────────────────────────────────────────────────────────────
 function BetForm({ match }) {
   const markets = Array.isArray(match.markets) ? match.markets : [];
-  const maxBet = Math.max(1, Math.floor(Number(state.me?.walletBalance || state.me?.points || 0) * 0.25));
+  const walletPoints = Math.max(0, Number(state.me?.walletBalance || state.me?.points || 0));
   const draft = state.betDrafts[String(match.id)] || {};
 
   const [selectedPick, setSelectedPick] = React.useState(
     () => findDraftPick(match.id, markets) || findFirstPick(markets)
   );
   const [stake, setStake] = React.useState(
-    () => Math.max(1, Math.min(maxBet, Number(draft.stake || 100)))
+    () => Math.max(1, Number(draft.stake || 100))
   );
   const [marketFilter, setMarketFilter] = React.useState('all');
 
@@ -637,7 +637,7 @@ function BetForm({ match }) {
   };
 
   const handleStakeChange = value => {
-    const next = Math.max(1, Math.min(maxBet, Number(value) || 1));
+    const next = Math.max(1, Number(value) || 1);
     setStake(next);
     state.betDrafts[String(match.id)] = { ...(state.betDrafts[String(match.id)] || {}), stake: next };
   };
@@ -669,9 +669,9 @@ function BetForm({ match }) {
 
   return e('form', { className: 'bet-form', onSubmit: handleSubmit },
     e('div', { className: 'bet-meta' },
-      e('span', { className: 'chip' }, `${formatNumber(markets.length)} k\u00e8o`),
-      e('span', { className: 'chip' }, `T\u1ed1i \u0111a ${formatNumber(maxBet)} \u0111i\u1ec3m`),
-      e('span', { className: 'chip' }, '\u0110i\u1ec3m \u1ea3o')
+      e('span', { className: 'chip' }, `${formatNumber(walletPoints)} điểm hiện có`),
+      e('span', { className: 'chip' }, `${formatNumber(markets.length)} kèo`),
+      e('span', { className: 'chip' }, 'Điểm ảo')
     ),
     e('div', { className: 'bet-preview' },
       e('div', null,
@@ -715,16 +715,15 @@ function BetForm({ match }) {
           name: 'betPoints',
           type: 'number',
           min: 1,
-          max: maxBet,
           value: stake,
           onChange: ev => handleStakeChange(ev.target.value)
         })
       ),
       e('div', { className: 'stake-pills' },
-        [25, 50, 100].filter(a => a <= maxBet).map(a =>
+        [25, 50, 100].map(a =>
           e('button', { key: a, type: 'button', className: 'chip', onClick: () => handleStakeChange(a) }, formatNumber(a))
         ),
-        e('button', { type: 'button', className: 'chip', onClick: () => handleStakeChange(maxBet) }, 'Max')
+        e('button', { type: 'button', className: 'chip', onClick: () => handleStakeChange(walletPoints || 1) }, 'All in')
       ),
       e('button', { className: 'primary-button', type: 'submit', disabled: !selectedPick }, '\u0110\u1eb7t k\u00e8o')
     ),
@@ -792,11 +791,6 @@ function ChatBox({ match }) {
     }, 'Message sent');
   };
 
-  const handleDelete = msgId => runTask(async () => {
-    await api(`/api/chat/${msgId}`, { method: 'DELETE' });
-    await loadRouteData();
-  }, 'Message deleted');
-
   return e(React.Fragment, null,
     e('div', { className: 'chat-list' },
       state.chat.length
@@ -806,10 +800,7 @@ function ChatBox({ match }) {
               e('div', null,
                 e('b', null, msg.user?.username || 'User'),
                 e('p', null, msg.message)
-              ),
-              state.me?.role === 'admin'
-                ? e('button', { className: 'icon-button danger', title: 'Delete', onClick: () => handleDelete(msg.id) }, 'X')
-                : null
+              )
             )
           )
         : e('div', { className: 'empty' }, 'No messages yet.')

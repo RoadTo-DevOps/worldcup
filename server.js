@@ -772,11 +772,7 @@ async function handleApi(req, res, urlObj) {
 
       const betPoints = parsePositiveNumber(body.betPoints);
       if (!betPoints || betPoints < 1) return fail(res, 400, 'Bet points invalid');
-      const maxBet = Math.max(1, Math.floor(Number(user.walletBalance || 0) * Number(db.settings.maxBetPercent || 0.25)));
       if (betPoints > Number(user.walletBalance || 0)) return fail(res, 400, 'Not enough points');
-      if (betPoints > maxBet && Number(user.walletBalance || 0) > maxBet) {
-        return fail(res, 400, `Max bet is ${maxBet}`);
-      }
 
       const marketKey = String(body.marketKey || '').trim();
       const optionKey = String(body.optionKey || '').trim();
@@ -917,17 +913,7 @@ async function handleApi(req, res, urlObj) {
     }
 
     if (req.method === 'DELETE' && pathname.startsWith('/api/chat/')) {
-      const admin = requireAdmin(req, res);
-      if (!admin) return;
-      const messageId = validateMatchId(pathname.split('/').pop());
-      const message = db.chatMessages.find((item) => String(item.id) === messageId);
-      if (!message) return fail(res, 404, 'Message not found');
-      message.deleted = true;
-      message.deletedByAdmin = true;
-      message.deletedAt = new Date().toISOString();
-      maybePersist();
-      broadcast('chat.deleted', { messageId });
-      return ok(res, 'Deleted');
+      return fail(res, 403, 'Deleting chat messages is disabled');
     }
 
     if (req.method === 'GET' && pathname === '/api/notifications') {
@@ -1092,7 +1078,6 @@ async function handleApi(req, res, urlObj) {
       if (multipliers.exact !== undefined) nextSettings.multipliers.exact = Number(multipliers.exact);
       if (multipliers.draw !== undefined) nextSettings.multipliers.draw = Number(multipliers.draw);
       if (body.initialBalance !== undefined) nextSettings.initialBalance = Math.max(0, Number(body.initialBalance));
-      if (body.maxBetPercent !== undefined) nextSettings.maxBetPercent = Math.max(0, Math.min(1, Number(body.maxBetPercent)));
       if (body.predictionLockMinutes !== undefined) nextSettings.predictionLockMinutes = Math.max(0, Number(body.predictionLockMinutes));
       if (body.featureLeague !== undefined) nextSettings.featureLeague = String(body.featureLeague);
       db.settings = nextSettings;
