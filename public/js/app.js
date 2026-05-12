@@ -1,9 +1,8 @@
-﻿import { api, ApiError, getToken, setToken, clearToken } from './api.js';
+import { api, ApiError, getToken, setToken, clearToken } from './api.js';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   LEAGUES,
-  escapeHtml,
   formatDateTime,
   formatNumber,
   initials,
@@ -16,6 +15,11 @@ import {
   clampText
 } from './utils.js';
 
+const e = React.createElement;
+const mountNode = document.getElementById('root');
+const root = mountNode ? createRoot(mountNode) : null;
+
+// ─── Global state (plain object) ──────────────────────────────────────────────
 const state = {
   me: null,
   matches: [],
@@ -27,83 +31,63 @@ const state = {
   chat: [],
   admin: null,
   betDrafts: {},
-  filters: {
-    league: 'all',
-    status: 'all',
-    date: '',
-    q: ''
-  },
-  matchMarketType: 'all',
+  filters: { league: 'all', status: 'all', date: '', q: '' },
   leaderboardPeriod: 'all-time',
   toast: null,
   stream: null,
   busy: false
 };
 
+// Subscriber pattern – replaces render() calls
+let _subs = [];
+function subscribe(fn) {
+  _subs.push(fn);
+  return () => { _subs = _subs.filter(f => f !== fn); };
+}
+function notify() { _subs.forEach(fn => fn()); }
+
+// ─── Constants ────────────────────────────────────────────────────────────────
 const MARKET_TYPE_LABELS = {
-  all: 'Tất cả',
-  moneyline: 'Cả trận',
-  handicap: 'Handicap',
-  total: 'Tài / Xỉu',
-  double_chance: 'Kép',
-  player_prop: 'Cầu thủ',
-  generic: 'Khác',
-  other: 'Khác'
+  all: 'Tất cả', moneyline: 'Cả trận', handicap: 'Handicap',
+  total: 'Tài / Xỉu', double_chance: 'Kép', player_prop: 'Cầu thủ',
+  generic: 'Khác', other: 'Khác'
 };
-
 const MARKET_TYPE_ORDER = ['moneyline', 'handicap', 'total', 'double_chance', 'player_prop', 'generic', 'other'];
-const mountNode = document.getElementById('root');
-const root = mountNode ? createRoot(mountNode) : null;
 
+// ─── Toast ────────────────────────────────────────────────────────────────────
 function setToast(message, tone = 'info') {
   state.toast = { message, tone };
   window.clearTimeout(setToast.timer);
-  setToast.timer = window.setTimeout(() => {
-    state.toast = null;
-    render();
-  }, 3500);
+  setToast.timer = window.setTimeout(() => { state.toast = null; notify(); }, 3500);
 }
 
-function marketTypeLabel(type) {
-  return MARKET_TYPE_LABELS[type] || MARKET_TYPE_LABELS.other;
-}
-
-function marketTypeKey(market) {
-  return market?.marketType || 'other';
-}
+// ─── Pure helpers ─────────────────────────────────────────────────────────────
+function marketTypeKey(market) { return market?.marketType || 'other'; }
+function marketTypeLabel(type) { return MARKET_TYPE_LABELS[type] || MARKET_TYPE_LABELS.other; }
 
 function buildMarketSections(markets) {
   const buckets = new Map();
   for (const market of markets || []) {
     const key = marketTypeKey(market);
-    if (!buckets.has(key)) {
-      buckets.set(key, {
-        key,
-        label: marketTypeLabel(key),
-        markets: []
-      });
-    }
+    if (!buckets.has(key)) buckets.set(key, { key, label: marketTypeLabel(key), markets: [] });
     buckets.get(key).markets.push(market);
   }
-  return [...buckets.values()].sort((a, b) => {
-    const left = MARKET_TYPE_ORDER.indexOf(a.key);
-    const right = MARKET_TYPE_ORDER.indexOf(b.key);
-    return (left === -1 ? 99 : left) - (right === -1 ? 99 : right);
-  }).map((section) => ({
-    ...section,
-    providers: [...new Set(section.markets.map((market) => market.provider || market.providerId || 'ESPN'))]
-  }));
+  return [...buckets.values()]
+    .sort((a, b) => {
+      const li = MARKET_TYPE_ORDER.indexOf(a.key);
+      const ri = MARKET_TYPE_ORDER.indexOf(b.key);
+      return (li === -1 ? 99 : li) - (ri === -1 ? 99 : ri);
+    })
+    .map(s => ({
+      ...s,
+      providers: [...new Set(s.markets.map(m => m.provider || m.providerId || 'ESPN'))]
+    }));
 }
 
 function findFirstPick(markets) {
   for (const market of markets || []) {
     if (market.disabled || !Array.isArray(market.options) || !market.options.length) continue;
-    return {
-      marketKey: market.key,
-      optionKey: market.options[0].key,
-      market,
-      option: market.options[0]
-    };
+    return { marketKey: market.key, optionKey: market.options[0].key, market, option: market.options[0] };
   }
   return null;
 }
@@ -113,82 +97,63 @@ function findDraftPick(matchId, markets) {
   if (!draft) return null;
   for (const market of markets || []) {
     if (market.key !== draft.marketKey || market.disabled) continue;
-    const option = market.options?.find((item) => item.key === draft.optionKey);
-    if (option) {
-      return {
-        marketKey: market.key,
-        optionKey: option.key,
-        market,
-        option
-      };
-    }
+    const option = market.options?.find(o => o.key === draft.optionKey);
+    if (option) return { marketKey: market.key, optionKey: option.key, market, option };
   }
   return null;
 }
 
-function renderOddsValue(value) {
-  const decimal = Number(value);
-  if (Number.isFinite(decimal) && decimal > 1) {
-    return `x${decimal.toFixed(2)}`;
-  }
-  return '-';
+function oddsValue(value) {
+  const d = Number(value);
+  return Number.isFinite(d) && d > 1 ? `x${d.toFixed(2)}` : '-';
 }
 
-function renderBetProjection(stake, odds) {
+function isMatchLive(match) {
+  return Boolean(match?.isLive || match?.status === 'in');
+}
+
+function isMatchFinal(match) {
+  return Boolean(match?.isFinal || match?.status === 'post');
+}
+
+function isUpcomingMatch(match) {
+  return !isMatchLive(match) && !isMatchFinal(match) && !match?.locked;
+}
+
+function betStatusTone(status) {
+  if (status === 'won') return 'good';
+  if (status === 'lost') return 'bad';
+  return '';
+}
+
+function matchResultSummary(match) {
+  if (!match) return { score: 'TBD', state: 'No result', tone: 'pending' };
+  if (isMatchLive(match)) {
+    return { score: scoreLine(match), state: statusLabel(match), tone: 'live' };
+  }
+  if (isMatchFinal(match)) {
+    return { score: scoreLine(match), state: 'FT', tone: 'final' };
+  }
+  return { score: formatDateTime(match.kickoffTime), state: statusLabel(match), tone: 'pending' };
+}
+
+function betProjection(stake, odds) {
   const bet = Number(stake || 0);
-  const decimal = Number(odds);
-  if (!Number.isFinite(bet) || bet <= 0 || !Number.isFinite(decimal) || decimal <= 1) {
+  const d = Number(odds);
+  if (!Number.isFinite(bet) || bet <= 0 || !Number.isFinite(d) || d <= 1)
     return 'Chọn kèo để xem trả về';
-  }
-  const payout = Math.round(bet * decimal);
-  const profit = Math.max(0, payout - bet);
-  return `Đặt ${formatNumber(bet)} nhận ${formatNumber(payout)}, lời ${formatNumber(profit)}`;
+  const payout = Math.round(bet * d);
+  return `Đặt ${formatNumber(bet)} nhận ${formatNumber(payout)}, lời ${formatNumber(Math.max(0, payout - bet))}`;
 }
 
-function updateBetPreview(form) {
-  if (!form) return;
-  const preview = form.querySelector('[data-bet-preview]');
-  if (!preview) return;
-  const selected = form.querySelector('input[name="pick"]:checked');
-  const stakeInput = form.querySelector('input[name="betPoints"]');
-  const titleEl = preview.querySelector('[data-preview-title]');
-  const labelEl = preview.querySelector('[data-preview-label]');
-  const oddsEl = preview.querySelector('[data-preview-odds]');
-  const returnEl = preview.querySelector('[data-preview-return]');
-  const stake = Number(stakeInput?.value || 0);
-
-  if (!selected) {
-    if (titleEl) titleEl.textContent = 'Chưa chọn kèo';
-    if (labelEl) labelEl.textContent = 'Chọn field bên dưới';
-    if (oddsEl) oddsEl.textContent = '-';
-    if (returnEl) returnEl.textContent = 'Chọn kèo trước';
-    return;
-  }
-
-  const odds = Number(selected.dataset.odds || 0);
-  if (titleEl) titleEl.textContent = selected.dataset.marketTitle || 'Kèo';
-  if (labelEl) labelEl.textContent = selected.dataset.optionLabel || selected.value;
-  if (oddsEl) oddsEl.textContent = renderOddsValue(odds);
-  if (returnEl) returnEl.textContent = renderBetProjection(stake, odds);
-}
-
-async function boot() {
-  bindEvents();
-  await loadSession();
-  await refreshPublicData();
-  await loadRouteData();
-  openStream();
-  render();
-  window.setInterval(refreshPublicDataQuiet, 30000);
-}
-
+// ─── Data fetching ────────────────────────────────────────────────────────────
 async function loadSession() {
   if (!getToken()) return;
   try {
     const data = await api('/api/auth/me');
     state.me = data.user;
     await refreshPrivateData();
-  } catch (error) {
+  } catch {
     clearToken();
     state.me = null;
   }
@@ -200,33 +165,31 @@ async function refreshPublicData() {
   if (state.filters.status !== 'all') params.set('status', state.filters.status);
   if (state.filters.date) params.set('date', state.filters.date);
   if (state.filters.q) params.set('q', state.filters.q);
-  const [matches, leaderboard] = await Promise.all([
-    api(`/api/matches?${params.toString()}`),
+  const [m, lb] = await Promise.all([
+    api(`/api/matches?${params}`),
     api(`/api/leaderboard?period=${encodeURIComponent(state.leaderboardPeriod)}`)
   ]);
-  state.matches = matches.matches || [];
-  state.leaderboard = leaderboard.leaderboard || [];
+  state.matches = m.matches || [];
+  state.leaderboard = lb.leaderboard || [];
 }
 
 async function refreshPublicDataQuiet() {
   try {
     await refreshPublicData();
-    render();
-  } catch {
-    // Keep UI alive if ESPN or local network is unavailable.
-  }
+    notify();
+  } catch { /* keep alive */ }
 }
 
 async function refreshPrivateData() {
   if (!state.me) return;
-  const [predictions, walletHistory, notifications] = await Promise.all([
+  const [p, w, n] = await Promise.all([
     api('/api/predictions/me'),
     api('/api/wallet/history'),
     api('/api/notifications?limit=20')
   ]);
-  state.predictions = predictions.predictions || [];
-  state.walletHistory = walletHistory.history || [];
-  state.notifications = notifications.notifications || [];
+  state.predictions = p.predictions || [];
+  state.walletHistory = w.history || [];
+  state.notifications = n.notifications || [];
 }
 
 async function loadRouteData() {
@@ -234,21 +197,16 @@ async function loadRouteData() {
   state.detail = null;
   state.chat = [];
   if (name === 'match' && id) {
-    state.matchMarketType = 'all';
     const detail = await api(`/api/matches/${encodeURIComponent(id)}`);
     state.detail = detail.match;
     state.chat = detail.chat || [];
   }
-  if (name === 'profile' && state.me) {
-    await refreshPrivateData();
-  }
-  if (name === 'admin' && state.me?.role === 'admin') {
-    await loadAdminData();
-  }
+  if (name === 'profile' && state.me) await refreshPrivateData();
+  if (name === 'admin' && state.me?.role === 'admin') await loadAdminData();
 }
 
 async function loadAdminData() {
-  const [users, transactions, config, matches, predictions] = await Promise.all([
+  const [u, tx, cfg, m, p] = await Promise.all([
     api('/api/admin/users'),
     api('/api/admin/transactions'),
     api('/api/admin/config'),
@@ -256,19 +214,16 @@ async function loadAdminData() {
     api('/api/admin/predictions?status=pending')
   ]);
   state.admin = {
-    users: users.users || [],
-    transactions: transactions.transactions || [],
-    settings: config.settings || {},
-    matches: matches.matches || [],
-    predictions: predictions.predictions || []
+    users: u.users || [],
+    transactions: tx.transactions || [],
+    settings: cfg.settings || {},
+    matches: m.matches || [],
+    predictions: p.predictions || []
   };
 }
 
 function openStream() {
-  if (state.stream) {
-    state.stream.close();
-    state.stream = null;
-  }
+  if (state.stream) { state.stream.close(); state.stream = null; }
   const token = getToken();
   if (!token) return;
   const stream = new EventSource(`/api/stream?token=${encodeURIComponent(token)}`);
@@ -281,942 +236,996 @@ function openStream() {
   state.stream = stream;
 }
 
-async function refreshFromStream(event) {
+async function refreshFromStream() {
   try {
     await refreshPublicData();
     if (state.me) await refreshPrivateData();
     if (routeName() === 'match') await loadRouteData();
     if (routeName() === 'admin' && state.me?.role === 'admin') await loadAdminData();
-    render();
-  } catch {
-    // Event stream is a fast path, not a blocker.
-  }
+    notify();
+  } catch { /* fast path */ }
 }
 
-function bindEvents() {
-  window.addEventListener('hashchange', async () => {
-    await loadRouteData().catch((error) => setToast(error.message, 'bad'));
-    render();
-  });
-
-  document.addEventListener('click', async (event) => {
-    const button = event.target.closest('[data-action]');
-    if (!button) return;
-    const action = button.dataset.action;
-    if (action === 'market-filter') {
-      state.matchMarketType = button.dataset.marketType || 'all';
-      render();
-      return;
-    }
-    if (action === 'stake-preset') {
-      event.preventDefault();
-      const form = button.closest('form');
-      const stakeInput = form?.querySelector('input[name="betPoints"]');
-      if (stakeInput) {
-        const max = Number(stakeInput.max || 0);
-        const raw = button.dataset.amount === 'max' ? max : Number(button.dataset.amount || 0);
-        const next = Math.max(1, Math.min(max || raw || 1, raw || max || 1));
-        stakeInput.value = String(next);
-        const matchId = form.querySelector('input[name="matchId"]')?.value;
-        if (matchId) {
-          state.betDrafts[String(matchId)] = {
-            ...(state.betDrafts[String(matchId)] || {}),
-            stake: next
-          };
-        }
-        updateBetPreview(form);
-      }
-      return;
-    }
-    if (action === 'logout') {
-      clearToken();
-      state.me = null;
-      state.predictions = [];
-      state.walletHistory = [];
-      state.betDrafts = {};
-      if (state.stream) state.stream.close();
-      window.location.hash = '#/home';
-      render();
-      return;
-    }
-    if (action === 'refresh') {
-      await runTask(async () => {
-        await refreshPublicData();
-        if (state.me) await refreshPrivateData();
-        await loadRouteData();
-      }, 'Refreshed');
-      return;
-    }
-    if (action === 'period') {
-      state.leaderboardPeriod = button.dataset.period || 'all-time';
-      await runTask(refreshPublicData, 'Leaderboard updated');
-      return;
-    }
-    if (action === 'sync') {
-      await runTask(async () => {
-        await api('/api/admin/sync', { method: 'POST', body: { mode: 'fixtures' } });
-        await refreshPublicData();
-        await loadAdminData();
-      }, 'ESPN synced');
-      return;
-    }
-    if (action === 'ban' || action === 'unban') {
-      await runTask(async () => {
-        await api(`/api/admin/users/${button.dataset.userId}/${action}`, { method: 'PATCH', body: {} });
-        await loadAdminData();
-        await refreshPublicData();
-      }, 'User updated');
-      return;
-    }
-    if (action === 'toggle-role') {
-      await runTask(async () => {
-        await api(`/api/admin/users/${button.dataset.userId}/role`, {
-          method: 'PATCH',
-          body: { role: button.dataset.roleTarget }
-        });
-        await loadAdminData();
-        await refreshPublicData();
-      }, 'Role updated');
-      return;
-    }
-    if (action === 'reset-user') {
-      await runTask(async () => {
-        await api(`/api/admin/users/${button.dataset.userId}/reset`, { method: 'POST', body: {} });
-        await loadAdminData();
-        await refreshPublicData();
-      }, 'Wallet reset');
-      return;
-    }
-    if (action === 'delete-user') {
-      const username = button.dataset.username || 'this user';
-      const confirmed = window.confirm(`Delete account "${username}"? This removes user, bets, wallet history, chat messages, and notifications.`);
-      if (!confirmed) return;
-      await runTask(async () => {
-        await api(`/api/admin/users/${button.dataset.userId}`, { method: 'DELETE' });
-        await loadAdminData();
-        await refreshPublicData();
-        if (state.me) await refreshPrivateData();
-      }, 'User deleted');
-      return;
-    }
-    if (action === 'delete-chat') {
-      await runTask(async () => {
-        await api(`/api/chat/${button.dataset.messageId}`, { method: 'DELETE' });
-        await loadRouteData();
-      }, 'Message deleted');
-      return;
-    }
-    if (action === 'settle-prediction') {
-      await runTask(async () => {
-        await api(`/api/admin/predictions/${button.dataset.predictionId}/settle`, {
-          method: 'POST',
-          body: { outcome: button.dataset.outcome }
-        });
-        await loadAdminData();
-        await refreshPrivateData();
-      }, 'Prediction settled');
-    }
-  });
-
-  document.addEventListener('input', (event) => {
-    const predictionForm = event.target.closest('[data-form="prediction"]');
-    if (predictionForm && (event.target.name === 'betPoints' || event.target.name === 'pick')) {
-      if (event.target.name === 'pick') {
-        const [marketKey, optionKey] = String(event.target.value || '').split('|');
-        const matchId = predictionForm.querySelector('input[name="matchId"]')?.value;
-        if (matchId && marketKey && optionKey) {
-          state.betDrafts[String(matchId)] = {
-            ...(state.betDrafts[String(matchId)] || {}),
-            marketKey,
-            optionKey
-          };
-        }
-      } else if (event.target.name === 'betPoints') {
-        const matchId = predictionForm.querySelector('input[name="matchId"]')?.value;
-        const stake = Number(event.target.value || 0);
-        if (matchId) {
-          state.betDrafts[String(matchId)] = {
-            ...(state.betDrafts[String(matchId)] || {}),
-            stake
-          };
-        }
-      }
-      updateBetPreview(predictionForm);
-    }
-    const field = event.target.closest('[data-filter]');
-    if (!field) return;
-    state.filters[field.dataset.filter] = field.value;
-  });
-
-  document.addEventListener('change', async (event) => {
-    const roleSelect = event.target.closest('[data-role-select]');
-    if (roleSelect) {
-      await runTask(async () => {
-        await api(`/api/admin/users/${roleSelect.dataset.userId}/role`, {
-          method: 'PATCH',
-          body: { role: roleSelect.value }
-        });
-        await loadAdminData();
-        await refreshPublicData();
-      }, 'Role updated');
-      return;
-    }
-
-    const predictionForm = event.target.closest('[data-form="prediction"]');
-    if (predictionForm && (event.target.name === 'betPoints' || event.target.name === 'pick')) {
-      if (event.target.name === 'pick') {
-        const [marketKey, optionKey] = String(event.target.value || '').split('|');
-        const matchId = predictionForm.querySelector('input[name="matchId"]')?.value;
-        if (matchId && marketKey && optionKey) {
-          state.betDrafts[String(matchId)] = {
-            ...(state.betDrafts[String(matchId)] || {}),
-            marketKey,
-            optionKey
-          };
-        }
-      } else if (event.target.name === 'betPoints') {
-        const matchId = predictionForm.querySelector('input[name="matchId"]')?.value;
-        const stake = Number(event.target.value || 0);
-        if (matchId) {
-          state.betDrafts[String(matchId)] = {
-            ...(state.betDrafts[String(matchId)] || {}),
-            stake
-          };
-        }
-      }
-      updateBetPreview(predictionForm);
-    }
-    const field = event.target.closest('[data-filter]');
-    if (!field) return;
-    state.filters[field.dataset.filter] = field.value;
-    await runTask(refreshPublicData, 'Filters applied', false);
-  });
-
-  document.addEventListener('submit', async (event) => {
-    const form = event.target;
-    if (!form.dataset.form) return;
-    event.preventDefault();
-    const body = Object.fromEntries(new FormData(form).entries());
-    if (form.dataset.form === 'login') {
-      await runTask(async () => {
-        const data = await api('/api/auth/login', {
-          method: 'POST',
-          body: { ...body, remember: body.remember === 'on' }
-        });
-        setToken(data.token);
-        state.me = data.user;
-        state.betDrafts = {};
-        await refreshPrivateData();
-        await refreshPublicData();
-        openStream();
-        window.location.hash = '#/home';
-      }, 'Logged in');
-      return;
-    }
-    if (form.dataset.form === 'register') {
-      await runTask(async () => {
-        const data = await api('/api/auth/register', {
-          method: 'POST',
-          body: { ...body, remember: true }
-        });
-        setToken(data.token);
-        state.me = data.user;
-        state.betDrafts = {};
-        await refreshPrivateData();
-        await refreshPublicData();
-        openStream();
-        window.location.hash = '#/home';
-      }, 'Registered');
-      return;
-    }
-    if (form.dataset.form === 'prediction') {
-      await runTask(async () => {
-        const [marketKey, optionKey] = String(body.pick || '').split('|');
-        await api('/api/predictions', {
-          method: 'POST',
-          body: {
-            matchId: body.matchId,
-            marketKey,
-            optionKey,
-            betPoints: body.betPoints
-          }
-        });
-        delete state.betDrafts[String(body.matchId)];
-        await refreshPrivateData();
-        await refreshPublicData();
-        await loadRouteData();
-      }, 'Bet saved');
-      return;
-    }
-    if (form.dataset.form === 'chat') {
-      await runTask(async () => {
-        await api('/api/chat/send', { method: 'POST', body });
-        form.reset();
-        await loadRouteData();
-      }, 'Message sent');
-      return;
-    }
-    if (form.dataset.form === 'admin-points') {
-      await runTask(async () => {
-        const amount = Number(body.amount || 0) * (body.mode === 'deduct' ? -1 : 1);
-        await api(`/api/admin/users/${body.userId}/points`, {
-          method: 'POST',
-          body: { amount, note: body.note }
-        });
-        form.reset();
-        await loadAdminData();
-        await refreshPublicData();
-      }, 'Points updated');
-      return;
-    }
-    if (form.dataset.form === 'admin-config') {
-      await runTask(async () => {
-        await api('/api/admin/config', {
-          method: 'POST',
-          body: {
-            multipliers: {
-              win: Number(body.win),
-              exact: Number(body.exact),
-              draw: Number(body.draw)
-            },
-            initialBalance: Number(body.initialBalance),
-            maxBetPercent: Number(body.maxBetPercent),
-            predictionLockMinutes: Number(body.predictionLockMinutes),
-            featureLeague: body.featureLeague
-          }
-        });
-        await loadAdminData();
-      }, 'Config saved');
-    }
-  });
-}
-
+// ─── Task runner ──────────────────────────────────────────────────────────────
 async function runTask(task, successMessage, showSuccess = true) {
   state.busy = true;
-  render();
+  notify();
   try {
     await task();
     if (showSuccess) setToast(successMessage, 'good');
-  } catch (error) {
-    const message = error instanceof ApiError ? error.message : 'Action failed';
-    setToast(message, 'bad');
+  } catch (err) {
+    setToast(err instanceof ApiError ? err.message : 'Action failed', 'bad');
   } finally {
     state.busy = false;
-    render();
+    notify();
   }
 }
 
-function render() {
-  if (!root) return;
-  root.render(React.createElement(App));
+// ─── Route binding ────────────────────────────────────────────────────────────
+function bindEvents() {
+  window.addEventListener('hashchange', async () => {
+    await loadRouteData().catch(err => setToast(err.message, 'bad'));
+    notify();
+  });
 }
 
+// =============================================================================
+// React Components
+// =============================================================================
+
+function ToastBar() {
+  if (!state.toast) return null;
+  return e('div', { className: `toast ${state.toast.tone}` }, state.toast.message);
+}
+
+// ─── Top bar ──────────────────────────────────────────────────────────────────
+function TopBar() {
+  const page = routeName();
+  const liveCount = state.matches.filter(m => m.isLive || m.status === 'in').length;
+
+  const handleLogout = () => {
+    clearToken();
+    state.me = null;
+    state.predictions = [];
+    state.walletHistory = [];
+    state.betDrafts = {};
+    if (state.stream) state.stream.close();
+    window.location.hash = '#/home';
+    notify();
+  };
+
+  const handleRefresh = () => runTask(async () => {
+    await refreshPublicData();
+    if (state.me) await refreshPrivateData();
+    await loadRouteData();
+  }, 'Refreshed');
+
+  const navItems = [
+    ['home', 'Home', '#/home'],
+    ['leaderboard', 'Leaderboard', '#/leaderboard'],
+    ...(state.me ? [['profile', 'Profile', '#/profile']] : []),
+    ...(state.me?.role === 'admin' ? [['admin', 'Admin', '#/admin']] : [])
+  ];
+
+  return e('header', { className: 'topbar' },
+    e('a', { className: 'brand', href: '#/home', 'aria-label': 'Worldcup Pick home' },
+      e('span', { className: 'brand-mark' }, 'WP'),
+      e('span', null,
+        e('strong', null, 'Worldcup Pick'),
+        e('small', null, 'Virtual points only')
+      )
+    ),
+    e('nav', { className: 'nav' },
+      navItems.map(([key, label, href]) =>
+        e('a', { key, className: page === key ? 'active' : undefined, href }, label)
+      )
+    ),
+    e('div', { className: 'top-actions' },
+      state.busy ? e('span', { className: 'mini-loader' }) : null,
+      e('span', { className: 'chip live-dot' }, `${formatNumber(liveCount)} live`),
+      state.me ? e('span', { className: 'chip' }, `${formatNumber(state.me.points)} pts`) : null,
+      e('button', { className: 'icon-button', onClick: handleRefresh, title: 'Refresh' }, '\u21bb'),
+      state.me
+        ? e('button', { className: 'ghost-button', onClick: handleLogout }, 'Logout')
+        : e(React.Fragment, null,
+            e('a', { className: 'ghost-button', href: '#/register' }, '\u0110\u0103ng k\u00fd'),
+            e('a', { className: 'primary-link', href: '#/login' }, 'Login')
+          )
+    )
+  );
+}
+
+// ─── App root ─────────────────────────────────────────────────────────────────
 function App() {
-  return React.createElement(
-    'div',
-    { className: 'shell' },
-    React.createElement('header', {
-      className: 'topbar',
-      dangerouslySetInnerHTML: {
-        __html: `
-          <a class="brand" href="#/home" aria-label="Worldcup Pick home">
-            <span class="brand-mark">WP</span>
-            <span>
-              <strong>Worldcup Pick</strong>
-              <small>Virtual points only</small>
-            </span>
-          </a>
-          <nav class="nav" id="nav">${renderNav()}</nav>
-          <div class="top-actions" id="topActions">${renderTopActions()}</div>
-        `
-      }
-    }),
-    React.createElement('main', {
-      className: 'app',
-      'aria-live': 'polite',
-      dangerouslySetInnerHTML: { __html: renderPageHtml() }
+  const [, forceUpdate] = React.useState(0);
+  React.useEffect(() => subscribe(() => forceUpdate(v => v + 1)), []);
+
+  const page = routeName();
+  const pageMap = {
+    auth: LoginPage, login: LoginPage,
+    register: RegisterPage,
+    leaderboard: LeaderboardPage,
+    profile: ProfilePage,
+    match: MatchPage,
+    admin: AdminPage
+  };
+  const PageComp = pageMap[page] || HomePage;
+
+  return e('div', { className: 'shell' },
+    e(TopBar, null),
+    e('main', { className: 'app', 'aria-live': 'polite' },
+      e(PageComp, null)
+    )
+  );
+}
+
+// ─── Home page ────────────────────────────────────────────────────────────────
+function HomePage() {
+  const live = state.matches.filter(isMatchLive).slice(0, 4);
+  const upcoming = state.matches.filter(isUpcomingMatch).slice(0, 8);
+  const hot = [...state.matches].sort((a, b) => Number(b.hotScore || 0) - Number(a.hotScore || 0)).slice(0, 4);
+
+  const handleFilterChange = async (key, value) => {
+    state.filters[key] = value;
+    await runTask(refreshPublicData, '', false);
+  };
+
+  return e(React.Fragment, null,
+    e(ToastBar, null),
+    e('section', { className: 'hero' },
+      e('div', null,
+        e('p', { className: 'eyebrow' }, 'ESPN public scoreboard'),
+        e('h1', null, 'Pick football lines with friends, using virtual points only.'),
+        e('p', { className: 'hero-copy' },
+          'No payment, no cash-out, no real-money flow. Bets are locked before kickoff and settled from match result.'
+        )
+      ),
+      e('div', { className: 'hero-stats' },
+        e('span', null, e('b', null, formatNumber(state.matches.length)), ' matches'),
+        e('span', null, e('b', null, formatNumber(state.leaderboard.length)), ' players'),
+        e('span', null, e('b', null, state.me ? formatNumber(state.me.points) : '0'), ' my points')
+      )
+    ),
+    e('section', { className: 'toolbar' },
+      e('select', { value: state.filters.league, onChange: ev => handleFilterChange('league', ev.target.value) },
+        LEAGUES.map(l => e('option', { key: l.value, value: l.value }, l.label))
+      ),
+      e('select', { value: state.filters.status, onChange: ev => handleFilterChange('status', ev.target.value) },
+        e('option', { value: 'all' }, 'All status'),
+        e('option', { value: 'live' }, 'Live'),
+        e('option', { value: 'upcoming' }, 'Upcoming'),
+        e('option', { value: 'final' }, 'Final')
+      ),
+      e('input', {
+        type: 'date',
+        value: state.filters.date,
+        onChange: ev => handleFilterChange('date', ev.target.value)
+      }),
+      e('input', {
+        type: 'search',
+        placeholder: 'Search team',
+        value: state.filters.q,
+        onChange: ev => handleFilterChange('q', ev.target.value)
+      }),
+      e('button', {
+        className: 'secondary-button',
+        onClick: () => runTask(refreshPublicData, 'Refreshed')
+      }, 'Refresh')
+    ),
+    e('section', { className: 'grid two' },
+      e('div', { className: 'panel' },
+        e('div', { className: 'section-head' }, e('h2', null, 'Live scores'), e('span', null, formatNumber(live.length))),
+        e(MatchList, { matches: live })
+      ),
+      e('div', { className: 'panel' },
+        e('div', { className: 'section-head' }, e('h2', null, 'Leaderboard'), e('a', { href: '#/leaderboard' }, 'View all')),
+        e(LeaderboardMini, null)
+      )
+    ),
+    e('section', { className: 'grid two' },
+      e('div', { className: 'panel' },
+        e('div', { className: 'section-head' }, e('h2', null, 'Upcoming matches'), e('span', null, formatNumber(upcoming.length))),
+        e(MatchList, { matches: upcoming })
+      ),
+      e('div', { className: 'panel' },
+        e('div', { className: 'section-head' }, e('h2', null, 'Hot matches'), e('span', null, formatNumber(hot.length))),
+        e(MatchList, { matches: hot })
+      )
+    ),
+    state.me ? e(NotificationsSection, null) : null
+  );
+}
+
+function MatchList({ matches }) {
+  if (!matches.length) return e('div', { className: 'empty' }, 'No matches found.');
+  return e('div', { className: 'match-list' },
+    matches.map(match => e(MatchCard, { key: match.id, match }))
+  );
+}
+
+function MatchCard({ match }) {
+  return e('a', { className: 'match-card', href: `#/match/${match.id}` },
+    e('span', { className: `badge ${statusClass(match)}` }, statusLabel(match)),
+    e('div', { className: 'match-league' }, match.leagueLabel || match.league),
+    e('div', { className: 'teams' },
+      e(TeamDisplay, { name: match.homeTeam, logo: match.homeLogo }),
+      e('strong', { className: 'score' }, scoreLine(match)),
+      e(TeamDisplay, { name: match.awayTeam, logo: match.awayLogo })
+    ),
+    e('div', { className: 'match-meta' },
+      e('span', null, formatDateTime(match.kickoffTime)),
+      e('span', null, match.locked ? 'Locked' : 'Open')
+    ),
+    match.userPrediction
+      ? e('div', { className: 'prediction-pill' }, predictionStatus(match.userPrediction))
+      : null
+  );
+}
+
+function TeamDisplay({ name, logo }) {
+  return e('span', { className: 'team' },
+    logo ? e('img', { src: logo, alt: '' }) : e('span', { className: 'avatar' }, initials(name)),
+    e('span', null, name)
+  );
+}
+
+function LeaderboardMini() {
+  if (!state.leaderboard.length) return e('div', { className: 'empty' }, 'No players yet.');
+  return e('div', { className: 'rank-list' },
+    state.leaderboard.slice(0, 6).map(row =>
+      e('div', { key: row.id, className: 'rank-row' },
+        e('b', null, `#${row.rank}`),
+        e('span', { className: 'avatar' }, initials(row.username)),
+        e('span', null, row.username),
+        e('strong', null, `${formatNumber(row.points)} pts`)
+      )
+    )
+  );
+}
+
+// ─── Leaderboard page ─────────────────────────────────────────────────────────
+function LeaderboardPage() {
+  const handlePeriod = period => runTask(async () => {
+    state.leaderboardPeriod = period;
+    await refreshPublicData();
+  }, 'Leaderboard updated');
+
+  return e(React.Fragment, null,
+    e(ToastBar, null),
+    e('section', { className: 'page-head' },
+      e('div', null, e('p', { className: 'eyebrow' }, 'Competition'), e('h1', null, 'Leaderboard')),
+      e('div', { className: 'segmented' },
+        ['all-time', 'week', 'month'].map(period =>
+          e('button', {
+            key: period,
+            className: state.leaderboardPeriod === period ? 'active' : undefined,
+            onClick: () => handlePeriod(period)
+          }, period)
+        )
+      )
+    ),
+    e('section', { className: 'panel' },
+      e('div', { className: 'table-wrap' },
+        e('table', null,
+          e('thead', null,
+            e('tr', null,
+              e('th', null, 'Rank'), e('th', null, 'User'), e('th', null, 'Points'),
+              e('th', null, 'Accuracy'), e('th', null, 'Matches')
+            )
+          ),
+          e('tbody', null,
+            state.leaderboard.map(row =>
+              e('tr', { key: row.id },
+                e('td', null, `#${row.rank}`),
+                e('td', null,
+                  e('span', { className: 'cell-user' },
+                    e('span', { className: 'avatar' }, initials(row.username)),
+                    row.username
+                  )
+                ),
+                e('td', null, formatNumber(state.leaderboardPeriod === 'all-time' ? row.points : row.periodPoints)),
+                e('td', null, `${row.accuracy}%`),
+                e('td', null, formatNumber(row.predictions))
+              )
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
+// ─── Match page ───────────────────────────────────────────────────────────────
+function MatchPage() {
+  const [, id] = routeParts();
+  const match = state.detail || state.matches.find(m => String(m.id) === String(id));
+  if (!match) return e(React.Fragment, null, e(ToastBar, null), e('div', { className: 'empty page-empty' }, 'Match not found.'));
+
+  return e(React.Fragment, null,
+    e(ToastBar, null),
+    e('section', { className: 'match-hero' },
+      e('div', null,
+        e('p', { className: 'eyebrow' }, match.leagueLabel || match.league),
+        e('h1', null, `${match.homeTeam} vs ${match.awayTeam}`),
+        e('p', null, formatDateTime(match.kickoffTime), match.venue ? ` - ${match.venue}` : '')
+      ),
+      e('div', { className: 'big-score' },
+        e('span', null, formatNumber(match.homeScore)),
+        e('b', null, match.status === 'pre' && !match.isLive ? 'vs' : '-'),
+        e('span', null, formatNumber(match.awayScore))
+      ),
+      e('span', { className: `badge ${statusClass(match)}` }, statusLabel(match))
+    ),
+    e('section', { className: 'grid two' },
+      e('div', { className: 'panel' },
+        e('div', { className: 'section-head' },
+          e('h2', null, 'B\u1ea3ng c\u01b0\u1ee3c'),
+          e('span', null, match.locked ? 'Kh\u00f3a' : 'M\u1edf')
+        ),
+        e(BetSection, { match, key: match.id })
+      ),
+      e('div', { className: 'panel' },
+        e('div', { className: 'section-head' },
+          e('h2', null, 'Chat ph\u00f2ng'),
+          e('span', null, formatNumber(state.chat.length))
+        ),
+        e(ChatBox, { match })
+      )
+    )
+  );
+}
+
+// ─── Bet section ──────────────────────────────────────────────────────────────
+function BetSection({ match }) {
+  if (!state.me) {
+    return e('div', { className: 'empty' },
+      '\u0110\u0103ng nh\u1eadp \u0111\u1ec3 \u0111\u1eb7t k\u00e8o. ',
+      e('a', { href: '#/login' }, '\u0110\u0103ng nh\u1eadp')
+    );
+  }
+  const placed = match.userPredictions || (match.userPrediction ? [match.userPrediction] : []);
+  return e(React.Fragment, null,
+    e(PlacedBets, { predictions: placed }),
+    match.locked
+      ? e('div', { className: 'empty' }, 'C\u1eeda c\u01b0\u1ee3c \u0111\u00e3 \u0111\u00f3ng.')
+      : e(BetForm, { match, key: match.id })
+  );
+}
+
+function PlacedBets({ predictions }) {
+  if (!predictions.length) return null;
+  return e('div', { className: 'placed-bets' },
+    predictions.map((pred, i) =>
+      e('div', { key: i, className: 'placed-bet' },
+        e('div', null,
+          e('b', null, pred.market?.title || 'K\u00e8o c\u0169'),
+          e('span', null,
+            `${pred.market?.label || `${pred.predictedHomeScore}-${pred.predictedAwayScore}`} @ ${oddsValue(pred.market?.odds)}`
+          )
+        ),
+        e('strong', null, predictionStatus(pred))
+      )
+    )
+  );
+}
+
+// ─── Bet form ─────────────────────────────────────────────────────────────────
+function BetForm({ match }) {
+  const markets = Array.isArray(match.markets) ? match.markets : [];
+  const maxBet = Math.max(1, Math.floor(Number(state.me?.walletBalance || state.me?.points || 0) * 0.25));
+  const draft = state.betDrafts[String(match.id)] || {};
+
+  const [selectedPick, setSelectedPick] = React.useState(
+    () => findDraftPick(match.id, markets) || findFirstPick(markets)
+  );
+  const [stake, setStake] = React.useState(
+    () => Math.max(1, Math.min(maxBet, Number(draft.stake || 100)))
+  );
+  const [marketFilter, setMarketFilter] = React.useState('all');
+
+  if (!markets.length) {
+    return e('div', { className: 'empty' }, 'Ch\u01b0a c\u00f3 odds t\u1eeb ESPN cho tr\u1eadn n\u00e0y.');
+  }
+
+  const sections = buildMarketSections(markets);
+  const visibleSections = marketFilter === 'all' ? sections : sections.filter(s => s.key === marketFilter);
+
+  const handlePickChange = (marketKey, optionKey, market, option) => {
+    const pick = { marketKey, optionKey, market, option };
+    setSelectedPick(pick);
+    state.betDrafts[String(match.id)] = { ...(state.betDrafts[String(match.id)] || {}), marketKey, optionKey };
+  };
+
+  const handleStakeChange = value => {
+    const next = Math.max(1, Math.min(maxBet, Number(value) || 1));
+    setStake(next);
+    state.betDrafts[String(match.id)] = { ...(state.betDrafts[String(match.id)] || {}), stake: next };
+  };
+
+  const handleSubmit = async ev => {
+    ev.preventDefault();
+    if (!selectedPick) return;
+    await runTask(async () => {
+      await api('/api/predictions', {
+        method: 'POST',
+        body: {
+          matchId: match.id,
+          marketKey: selectedPick.marketKey,
+          optionKey: selectedPick.optionKey,
+          betPoints: stake
+        }
+      });
+      delete state.betDrafts[String(match.id)];
+      await refreshPrivateData();
+      await refreshPublicData();
+      await loadRouteData();
+    }, 'Bet saved');
+  };
+
+  const filterTabs = [
+    { key: 'all', label: 'T\u1ea5t c\u1ea3', count: sections.reduce((t, s) => t + s.markets.length, 0) },
+    ...sections.map(s => ({ key: s.key, label: s.label, count: s.markets.length }))
+  ];
+
+  return e('form', { className: 'bet-form', onSubmit: handleSubmit },
+    e('div', { className: 'bet-meta' },
+      e('span', { className: 'chip' }, `${formatNumber(markets.length)} k\u00e8o`),
+      e('span', { className: 'chip' }, `T\u1ed1i \u0111a ${formatNumber(maxBet)} \u0111i\u1ec3m`),
+      e('span', { className: 'chip' }, '\u0110i\u1ec3m \u1ea3o')
+    ),
+    e('div', { className: 'bet-preview' },
+      e('div', null,
+        e('b', null, selectedPick?.market?.title || 'Ch\u01b0a ch\u1ecdn k\u00e8o'),
+        e('span', null, selectedPick?.option?.label || 'Ch\u1ecdn field b\u00ean d\u01b0\u1edbi')
+      ),
+      e('div', { className: 'bet-preview-stats' },
+        e('strong', null, oddsValue(selectedPick?.option?.odds)),
+        e('span', null, betProjection(stake, selectedPick?.option?.odds))
+      )
+    ),
+    e('div', { className: 'market-tabs', role: 'tablist' },
+      filterTabs.map(f =>
+        e('button', {
+          key: f.key,
+          type: 'button',
+          className: `market-tab${marketFilter === f.key ? ' active' : ''}`,
+          'aria-pressed': String(marketFilter === f.key),
+          onClick: () => setMarketFilter(f.key)
+        },
+          e('span', null, f.label),
+          e('small', null, formatNumber(f.count))
+        )
+      )
+    ),
+    e('div', { className: 'market-board' },
+      visibleSections.map((section, idx) =>
+        e(MarketSection, {
+          key: section.key,
+          section,
+          open: idx === 0,
+          selectedPick,
+          onPickChange: handlePickChange
+        })
+      )
+    ),
+    e('div', { className: 'stake-row' },
+      e('label', null,
+        '\u0110i\u1ec3m c\u01b0\u1ee3c',
+        e('input', {
+          name: 'betPoints',
+          type: 'number',
+          min: 1,
+          max: maxBet,
+          value: stake,
+          onChange: ev => handleStakeChange(ev.target.value)
+        })
+      ),
+      e('div', { className: 'stake-pills' },
+        [25, 50, 100].filter(a => a <= maxBet).map(a =>
+          e('button', { key: a, type: 'button', className: 'chip', onClick: () => handleStakeChange(a) }, formatNumber(a))
+        ),
+        e('button', { type: 'button', className: 'chip', onClick: () => handleStakeChange(maxBet) }, 'Max')
+      ),
+      e('button', { className: 'primary-button', type: 'submit', disabled: !selectedPick }, '\u0110\u1eb7t k\u00e8o')
+    ),
+    e('div', { className: 'market-note' },
+      'x1.76 ngh\u0129a l\u00e0 c\u01b0\u1ee3c 100, nh\u1eadn 176. +340 ho\u1eb7c 5/7 ch\u1ec9 l\u00e0 ki\u1ec3u ghi odds kh\u00e1c, app \u0111\u1ed5i h\u1ebft sang x \u0111\u1ec3 d\u1ec5 \u0111\u1ecdc.'
+    )
+  );
+}
+
+function MarketSection({ section, open, selectedPick, onPickChange }) {
+  return e('details', { className: 'market-group', open },
+    e('summary', null,
+      e('div', null,
+        e('b', null, section.label),
+        e('span', null, `${formatNumber(section.markets.length)} k\u00e8o \u00b7 ${formatNumber(section.providers.length)} nh\u00e0 cung c\u1ea5p`)
+      ),
+      e('span', { className: 'group-arrow' }, '\u2304')
+    ),
+    e('div', { className: 'market-group-body' },
+      section.markets.map(market =>
+        e(MarketItem, { key: market.key, market, selectedPick, onPickChange })
+      )
+    )
+  );
+}
+
+function MarketItem({ market, selectedPick, onPickChange }) {
+  if (market.disabled) {
+    return e('div', { className: 'market disabled' },
+      e('div', { className: 'market-title' }, e('b', null, market.title), e('span', null, 'Ch\u01b0a m\u1edf')),
+      e('p', null, market.description)
+    );
+  }
+  return e('div', { className: 'market' },
+    e('div', { className: 'market-title' }, e('b', null, market.title), e('span', null, market.description)),
+    e('div', { className: 'market-options' },
+      market.options.map(option =>
+        e('label', { key: option.key, className: 'market-option' },
+          e('input', {
+            type: 'radio',
+            name: 'pick',
+            value: `${market.key}|${option.key}`,
+            checked: selectedPick?.marketKey === market.key && selectedPick?.optionKey === option.key,
+            onChange: () => onPickChange(market.key, option.key, market, option)
+          }),
+          e('span', null, option.label),
+          e('b', null, oddsValue(option.odds))
+        )
+      )
+    )
+  );
+}
+
+// ─── Chat box ─────────────────────────────────────────────────────────────────
+function ChatBox({ match }) {
+  const [message, setMessage] = React.useState('');
+
+  const handleSubmit = async ev => {
+    ev.preventDefault();
+    if (!message.trim()) return;
+    await runTask(async () => {
+      await api('/api/chat/send', { method: 'POST', body: { matchId: match.id, message } });
+      setMessage('');
+      await loadRouteData();
+    }, 'Message sent');
+  };
+
+  const handleDelete = msgId => runTask(async () => {
+    await api(`/api/chat/${msgId}`, { method: 'DELETE' });
+    await loadRouteData();
+  }, 'Message deleted');
+
+  return e(React.Fragment, null,
+    e('div', { className: 'chat-list' },
+      state.chat.length
+        ? state.chat.map(msg =>
+            e('div', { key: msg.id, className: 'chat-message' },
+              e('span', { className: 'avatar' }, initials(msg.user?.username || 'User')),
+              e('div', null,
+                e('b', null, msg.user?.username || 'User'),
+                e('p', null, msg.message)
+              ),
+              state.me?.role === 'admin'
+                ? e('button', { className: 'icon-button danger', title: 'Delete', onClick: () => handleDelete(msg.id) }, 'X')
+                : null
+            )
+          )
+        : e('div', { className: 'empty' }, 'No messages yet.')
+    ),
+    state.me
+      ? e('form', { className: 'chat-form', onSubmit: handleSubmit },
+          e('input', {
+            value: message,
+            maxLength: 280,
+            placeholder: 'Type message',
+            required: true,
+            onChange: ev => setMessage(ev.target.value)
+          }),
+          e('button', { className: 'secondary-button', type: 'submit' }, 'Send')
+        )
+      : e('div', { className: 'empty' }, 'Login to chat.')
+  );
+}
+
+// ─── Profile page ─────────────────────────────────────────────────────────────
+function ProfilePage() {
+  if (!state.me) return e(React.Fragment, null,
+    e(ToastBar, null),
+    e('section', { className: 'panel' },
+      e('div', { className: 'empty' }, 'Login to view profile. ', e('a', { href: '#/login' }, 'Login'))
+    )
+  );
+
+  const rank = state.leaderboard.find(r => String(r.id) === String(state.me.id));
+
+  return e(React.Fragment, null,
+    e(ToastBar, null),
+    e('section', { className: 'page-head' },
+      e('div', null, e('p', { className: 'eyebrow' }, 'Profile'), e('h1', null, state.me.username)),
+      e('span', { className: 'avatar xl' }, initials(state.me.username))
+    ),
+    e('section', { className: 'stats-grid' },
+      e('div', { className: 'stat' }, e('span', null, 'Points'), e('b', null, formatNumber(state.me.points))),
+      e('div', { className: 'stat' }, e('span', null, 'Rank'), e('b', null, rank ? `#${rank.rank}` : '-')),
+      e('div', { className: 'stat' }, e('span', null, 'Bets'), e('b', null, formatNumber(state.predictions.length))),
+      e('div', { className: 'stat' }, e('span', null, 'Transactions'), e('b', null, formatNumber(state.walletHistory.length)))
+    ),
+    e('section', { className: 'grid two' },
+      e('div', { className: 'panel' },
+        e('div', { className: 'section-head' }, e('h2', null, 'Bet history')),
+        e(PredictionsHistory, null)
+      ),
+      e('div', { className: 'panel' },
+        e('div', { className: 'section-head' }, e('h2', null, 'Wallet history')),
+        e(WalletHistory, null)
+      )
+    )
+  );
+}
+
+function PredictionsHistory() {
+  if (!state.predictions.length) return e('div', { className: 'empty' }, 'No bets yet.');
+  return e('div', { className: 'stack-list' },
+    state.predictions.slice(0, 30).map((pred, i) => {
+      const result = matchResultSummary(pred.match);
+      return e('div', { key: i, className: `history-row pred-${pred.status}` },
+        e('div', null,
+          e('b', null, pred.match ? `${pred.match.homeTeam} vs ${pred.match.awayTeam}` : `Match #${pred.matchId}`),
+          e('div', { className: 'history-meta' },
+            e('span', { className: `score-result score-${result.tone}` }, result.score),
+            e('span', { className: `match-state match-state-${result.tone}` }, result.state),
+            e('span', null,
+              `${pred.market?.title || 'K\u00e8o c\u0169'} | ${pred.market?.label || `${pred.predictedHomeScore}-${pred.predictedAwayScore}`} | ${oddsValue(pred.market?.odds)}`
+            )
+          )
+        ),
+        e('div', { className: 'pred-actions' },
+          e('span', { className: `status-badge status-${pred.status}` }, pred.status.toUpperCase()),
+          e('strong', { className: betStatusTone(pred.status) },
+            `${formatNumber(pred.rewardPoints)} pts`
+          )
+        )
+      );
     })
   );
 }
 
-function renderPageHtml() {
-  const page = routeName();
-  if (page === 'auth') return renderAuthPage();
-  if (page === 'leaderboard') return renderLeaderboardPage();
-  if (page === 'profile') return renderProfilePage();
-  if (page === 'match') return renderMatchPage();
-  if (page === 'admin') return renderAdminPage();
-  return renderHomePage();
+function WalletHistory() {
+  if (!state.walletHistory.length) return e('div', { className: 'empty' }, 'No transactions yet.');
+  return e('div', { className: 'stack-list' },
+    state.walletHistory.slice(0, 12).map((tx, i) => {
+      const title = tx.type === 'admin_add' ? 'Admin cộng điểm' : 'Admin trừ điểm';
+      return e('div', { key: i, className: 'history-row' },
+        e('div', null, e('b', null, title), e('span', null, clampText(tx.note || 'Admin adjustment'))),
+        e('strong', { className: Number(tx.amount) >= 0 ? 'good' : 'bad' },
+          `${Number(tx.amount) >= 0 ? '+' : ''}${formatNumber(tx.amount)}`
+        )
+      );
+    })
+  );
 }
 
-function renderNav() {
-  const page = routeName();
-  const items = [
-    ['home', 'Home', '#/home'],
-    ['leaderboard', 'Leaderboard', '#/leaderboard']
-  ];
-  if (state.me) items.push(['profile', 'Profile', '#/profile']);
-  if (state.me?.role === 'admin') items.push(['admin', 'Admin', '#/admin']);
-  return items
-    .map(([key, label, href]) => `<a class="${page === key ? 'active' : ''}" href="${href}">${label}</a>`)
-    .join('');
+// ─── Admin page ───────────────────────────────────────────────────────────────
+function AdminPage() {
+  if (!state.me) return e(React.Fragment, null, e(ToastBar, null), e('div', { className: 'empty page-empty' }, 'Login required.'));
+  if (state.me.role !== 'admin') return e(React.Fragment, null, e(ToastBar, null), e('div', { className: 'empty page-empty' }, 'Admin only.'));
+  if (!state.admin) return e(React.Fragment, null, e(ToastBar, null), e('div', { className: 'empty page-empty' }, 'Loading admin data.'));
+
+  const handleSync = () => runTask(async () => {
+    await api('/api/admin/sync', { method: 'POST', body: { mode: 'fixtures' } });
+    await refreshPublicData();
+    await loadAdminData();
+  }, 'ESPN synced');
+
+  const handleBan = (userId, action) => runTask(async () => {
+    await api(`/api/admin/users/${userId}/${action}`, { method: 'PATCH', body: {} });
+    await loadAdminData();
+    await refreshPublicData();
+  }, 'User updated');
+
+  const handleResetUser = userId => runTask(async () => {
+    await api(`/api/admin/users/${userId}/reset`, { method: 'POST', body: {} });
+    await loadAdminData();
+    await refreshPublicData();
+  }, 'Wallet reset');
+
+  const handleDeleteUser = (userId, username) => {
+    if (!window.confirm(`Delete account "${username}"? This removes user, bets, wallet history, chat messages, and notifications.`)) return;
+    runTask(async () => {
+      await api(`/api/admin/users/${userId}`, { method: 'DELETE' });
+      await loadAdminData();
+      await refreshPublicData();
+      if (state.me) await refreshPrivateData();
+    }, 'User deleted');
+  };
+
+  const handleRoleChange = (userId, role) => runTask(async () => {
+    await api(`/api/admin/users/${userId}/role`, { method: 'PATCH', body: { role } });
+    await loadAdminData();
+    await refreshPublicData();
+  }, 'Role updated');
+
+  const handleSettle = (predictionId, outcome) => runTask(async () => {
+    await api(`/api/admin/predictions/${predictionId}/settle`, { method: 'POST', body: { outcome } });
+    await loadAdminData();
+    await refreshPrivateData();
+  }, 'Prediction settled');
+
+  return e(React.Fragment, null,
+    e(ToastBar, null),
+    e('section', { className: 'page-head' },
+      e('div', null, e('p', { className: 'eyebrow' }, 'Control room'), e('h1', null, 'Admin dashboard')),
+      e('button', { className: 'primary-button', onClick: handleSync }, 'Force ESPN sync')
+    ),
+    e(AdminPointsForm, null),
+    e('section', { className: 'panel' },
+      e('div', { className: 'section-head' }, e('h2', null, 'Users'), e('span', null, formatNumber(state.admin.users.length))),
+      e('div', { className: 'table-wrap' },
+        e('table', null,
+          e('thead', null,
+            e('tr', null,
+              e('th', null, 'User'), e('th', null, 'Role'), e('th', null, 'Points'),
+              e('th', null, 'Status'), e('th', null, 'Actions')
+            )
+          ),
+          e('tbody', null,
+            state.admin.users.map(user =>
+              e('tr', { key: user.id },
+                e('td', null, user.username),
+                e('td', null,
+                  e('select', {
+                    className: 'role-select',
+                    value: user.role,
+                    disabled: String(user.id) === String(state.me.id),
+                    onChange: ev => handleRoleChange(user.id, ev.target.value)
+                  },
+                    e('option', { value: 'user' }, 'user'),
+                    e('option', { value: 'admin' }, 'admin')
+                  )
+                ),
+                e('td', null, formatNumber(user.points)),
+                e('td', null, user.banned ? 'Banned' : 'Active'),
+                e('td', { className: 'actions' },
+                  e('button', { className: 'ghost-button', onClick: () => handleBan(user.id, user.banned ? 'unban' : 'ban') },
+                    user.banned ? 'Unban' : 'Ban'
+                  ),
+                  e('button', { className: 'ghost-button danger', onClick: () => handleResetUser(user.id) }, 'Reset'),
+                  String(user.id) !== String(state.me.id)
+                    ? e('button', { className: 'ghost-button danger', onClick: () => handleDeleteUser(user.id, user.username) }, 'Delete')
+                    : null
+                )
+              )
+            )
+          )
+        )
+      )
+    ),
+    e('section', { className: 'panel' },
+      e('div', { className: 'section-head' }, e('h2', null, 'Recent transactions')),
+      state.admin.transactions.length
+        ? e('div', { className: 'stack-list' },
+            state.admin.transactions.slice(0, 20).map((tx, i) =>
+              e('div', { key: i, className: 'history-row' },
+                e('div', null, e('b', null, `User #${tx.userId} - ${tx.type}`), e('span', null, tx.note)),
+                e('strong', { className: Number(tx.amount) >= 0 ? 'good' : 'bad' },
+                  `${Number(tx.amount) >= 0 ? '+' : ''}${formatNumber(tx.amount)}`
+                )
+              )
+            )
+          )
+        : e('div', { className: 'empty' }, 'No transactions.')
+    ),
+    e('section', { className: 'panel' },
+      e('div', { className: 'section-head' }, e('h2', null, 'Pending bets'), e('span', null, formatNumber(state.admin.predictions.length))),
+      state.admin.predictions.length
+        ? e('div', { className: 'stack-list' },
+            state.admin.predictions.map((pred, i) =>
+              e('div', { key: i, className: 'history-row' },
+                e('div', null,
+                  e('b', null, `${pred.user?.username || `User #${pred.userId}`} - ${pred.market?.title || 'Bet'}`),
+                  e('span', null,
+                    `${pred.match ? `${pred.match.homeTeam} vs ${pred.match.awayTeam}` : `Match #${pred.matchId}`} | ${pred.market?.label || ''} | ${oddsValue(pred.market?.odds)} | ${pred.status}`
+                  )
+                ),
+                e('strong', null, `${formatNumber(pred.rewardPoints)} pts`),
+                e('div', { className: 'actions' },
+                  e('button', { className: 'ghost-button', onClick: () => handleSettle(pred.id, 'won') }, 'Won'),
+                  e('button', { className: 'ghost-button', onClick: () => handleSettle(pred.id, 'lost') }, 'Lost'),
+                  e('button', { className: 'ghost-button', onClick: () => handleSettle(pred.id, 'push') }, 'Push')
+                )
+              )
+            )
+          )
+        : e('div', { className: 'empty' }, 'No pending bets.')
+    )
+  );
 }
 
-function renderTopActions() {
-  const liveCount = state.matches.filter((match) => match.isLive || match.status === 'in').length;
-  const busy = state.busy ? '<span class="mini-loader"></span>' : '';
-  if (!state.me) {
-    return `
-      <span class="chip live-dot">${formatNumber(liveCount)} live</span>
-      <button class="icon-button" data-action="refresh" title="Refresh">↻</button>
-      <a class="primary-link" href="#/auth">Login</a>
-    `;
-  }
-  return `
-    ${busy}
-    <span class="chip live-dot">${formatNumber(liveCount)} live</span>
-    <span class="chip">${formatNumber(state.me.points)} pts</span>
-    <button class="icon-button" data-action="refresh" title="Refresh">↻</button>
-    <button class="ghost-button" data-action="logout">Logout</button>
-  `;
+function AdminPointsForm() {
+  const users = state.admin?.users || [];
+  const [userId, setUserId] = React.useState(() => String(users[0]?.id || ''));
+  const [mode, setMode] = React.useState('add');
+  const [amount, setAmount] = React.useState(100);
+  const [note, setNote] = React.useState('');
+
+  const handleSubmit = async ev => {
+    ev.preventDefault();
+    const finalAmount = Number(amount) * (mode === 'deduct' ? -1 : 1);
+    await runTask(async () => {
+      await api(`/api/admin/users/${userId}/points`, { method: 'POST', body: { amount: finalAmount, note } });
+      setAmount(100);
+      setNote('');
+      await loadAdminData();
+      await refreshPublicData();
+    }, 'Points updated');
+  };
+
+  return e('section', { className: 'panel' },
+    e('div', { className: 'section-head' }, e('h2', null, 'Point adjustment')),
+    e('form', { className: 'form-grid', onSubmit: handleSubmit },
+      e('label', null, 'User',
+        e('select', { value: userId, onChange: ev => setUserId(ev.target.value), required: true },
+          users.map(u => e('option', { key: u.id, value: String(u.id) }, `${u.username} (${formatNumber(u.points)} pts)`))
+        )
+      ),
+      e('label', null, 'Mode',
+        e('select', { value: mode, onChange: ev => setMode(ev.target.value) },
+          e('option', { value: 'add' }, 'Add'),
+          e('option', { value: 'deduct' }, 'Deduct')
+        )
+      ),
+      e('label', null, 'Amount',
+        e('input', { type: 'number', min: 1, value: amount, required: true, onChange: ev => setAmount(ev.target.value) })
+      ),
+      e('label', null, 'Note',
+        e('input', { maxLength: 120, placeholder: 'Admin adjustment', value: note, onChange: ev => setNote(ev.target.value) })
+      ),
+      e('button', { className: 'secondary-button', type: 'submit' }, 'Update points')
+    )
+  );
 }
 
-function renderHomePage() {
-  const live = state.matches.filter((match) => match.isLive || match.status === 'in').slice(0, 4);
-  const upcoming = state.matches.filter((match) => !match.isFinal && !match.isLive && match.status !== 'post').slice(0, 8);
-  const hot = [...state.matches].sort((a, b) => Number(b.hotScore || 0) - Number(a.hotScore || 0)).slice(0, 4);
-  return `
-    ${renderToast()}
-    <section class="hero">
-      <div>
-        <p class="eyebrow">ESPN public scoreboard</p>
-        <h1>Pick football lines with friends, using virtual points only.</h1>
-        <p class="hero-copy">No payment, no cash-out, no real-money flow. Bets are locked before kickoff and settled from match result.</p>
-      </div>
-      <div class="hero-stats">
-        <span><b>${formatNumber(state.matches.length)}</b> matches</span>
-        <span><b>${formatNumber(state.leaderboard.length)}</b> players</span>
-        <span><b>${state.me ? formatNumber(state.me.points) : '0'}</b> my points</span>
-      </div>
-    </section>
-    <section class="toolbar">
-      <select data-filter="league">${LEAGUES.map((league) => `<option value="${league.value}" ${state.filters.league === league.value ? 'selected' : ''}>${league.label}</option>`).join('')}</select>
-      <select data-filter="status">
-        <option value="all" ${state.filters.status === 'all' ? 'selected' : ''}>All status</option>
-        <option value="live" ${state.filters.status === 'live' ? 'selected' : ''}>Live</option>
-        <option value="upcoming" ${state.filters.status === 'upcoming' ? 'selected' : ''}>Upcoming</option>
-        <option value="final" ${state.filters.status === 'final' ? 'selected' : ''}>Final</option>
-      </select>
-      <input type="date" data-filter="date" value="${escapeHtml(state.filters.date)}" />
-      <input type="search" data-filter="q" placeholder="Search team" value="${escapeHtml(state.filters.q)}" />
-      <button class="secondary-button" data-action="refresh">Refresh</button>
-    </section>
-    <section class="grid two">
-      <div class="panel">
-        <div class="section-head"><h2>Live scores</h2><span>${formatNumber(live.length)}</span></div>
-        ${renderMatchList(live)}
-      </div>
-      <div class="panel">
-        <div class="section-head"><h2>Leaderboard</h2><a href="#/leaderboard">View all</a></div>
-        ${renderLeaderboardMini()}
-      </div>
-    </section>
-    <section class="grid two">
-      <div class="panel">
-        <div class="section-head"><h2>Upcoming matches</h2><span>${formatNumber(upcoming.length)}</span></div>
-        ${renderMatchList(upcoming)}
-      </div>
-      <div class="panel">
-        <div class="section-head"><h2>Hot matches</h2><span>${formatNumber(hot.length)}</span></div>
-        ${renderMatchList(hot)}
-      </div>
-    </section>
-    ${state.me ? renderNotifications() : ''}
-  `;
+// ─── Auth pages ───────────────────────────────────────────────────────────────
+function LoginPage() {
+  const [email, setEmail] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [remember, setRemember] = React.useState(true);
+
+  const handleSubmit = async ev => {
+    ev.preventDefault();
+    await runTask(async () => {
+      const data = await api('/api/auth/login', { method: 'POST', body: { email, password, remember } });
+      setToken(data.token);
+      state.me = data.user;
+      state.betDrafts = {};
+      await refreshPrivateData();
+      await refreshPublicData();
+      openStream();
+      window.location.hash = '#/home';
+    }, 'Logged in');
+  };
+
+  return e(React.Fragment, null,
+    e(ToastBar, null),
+    e('section', { className: 'auth-solo' },
+      e('div', { className: 'panel auth-panel' },
+        e('div', { className: 'section-head' }, e('h2', null, '\u0110\u0103ng nh\u1eadp')),
+        e('form', { className: 'form-grid', onSubmit: handleSubmit },
+          e('label', null, 'Email ho\u1eb7c t\u00ean \u0111\u0103ng nh\u1eadp',
+            e('input', { type: 'text', autoComplete: 'username', required: true, value: email, onChange: ev => setEmail(ev.target.value) })
+          ),
+          e('label', null, 'M\u1eadt kh\u1ea9u',
+            e('input', { type: 'password', required: true, value: password, onChange: ev => setPassword(ev.target.value) })
+          ),
+          e('label', { className: 'check' },
+            e('input', { type: 'checkbox', checked: remember, onChange: ev => setRemember(ev.target.checked) }),
+            ' Ghi nh\u1edb \u0111\u0103ng nh\u1eadp'
+          ),
+          e('button', { className: 'primary-button', type: 'submit' }, '\u0110\u0103ng nh\u1eadp')
+        ),
+        e('p', { className: 'auth-switch' },
+          'Ch\u01b0a c\u00f3 t\u00e0i kho\u1ea3n? ',
+          e('a', { href: '#/register' }, '\u0110\u0103ng k\u00fd ngay')
+        )
+      )
+    )
+  );
 }
 
-function renderMatchList(matches) {
-  if (!matches.length) return `<div class="empty">No matches found.</div>`;
-  return `<div class="match-list">${matches.map(renderMatchCard).join('')}</div>`;
+function RegisterPage() {
+  const [username, setUsername] = React.useState('');
+  const [email, setEmail] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [confirmPassword, setConfirmPassword] = React.useState('');
+  const [avatar, setAvatar] = React.useState('');
+
+  const handleSubmit = async ev => {
+    ev.preventDefault();
+    if (password !== confirmPassword) {
+      setToast('M\u1eadt kh\u1ea9u nh\u1eadp l\u1ea1i kh\u00f4ng kh\u1edbp!', 'bad');
+      notify();
+      return;
+    }
+    await runTask(async () => {
+      const data = await api('/api/auth/register', {
+        method: 'POST',
+        body: { username, email, password, avatar, remember: true }
+      });
+      setToken(data.token);
+      state.me = data.user;
+      state.betDrafts = {};
+      await refreshPrivateData();
+      await refreshPublicData();
+      openStream();
+      window.location.hash = '#/home';
+    }, '\u0110\u0103ng k\u00fd th\u00e0nh c\u00f4ng!');
+  };
+
+  return e(React.Fragment, null,
+    e(ToastBar, null),
+    e('section', { className: 'auth-solo' },
+      e('div', { className: 'panel auth-panel' },
+        e('div', { className: 'section-head' }, e('h2', null, 'T\u1ea1o t\u00e0i kho\u1ea3n')),
+        e('form', { className: 'form-grid', onSubmit: handleSubmit },
+          e('label', null, 'T\u00ean \u0111\u0103ng nh\u1eadp',
+            e('input', { type: 'text', minLength: 2, autoComplete: 'username', required: true, value: username, onChange: ev => setUsername(ev.target.value) })
+          ),
+          e('label', null, 'Email',
+            e('input', { type: 'email', autoComplete: 'email', required: true, value: email, onChange: ev => setEmail(ev.target.value) })
+          ),
+          e('label', null, 'M\u1eadt kh\u1ea9u',
+            e('input', { type: 'password', minLength: 7, autoComplete: 'new-password', required: true, value: password, onChange: ev => setPassword(ev.target.value) })
+          ),
+          e('label', null, 'Nh\u1eadp l\u1ea1i m\u1eadt kh\u1ea9u',
+            e('input', { type: 'password', minLength: 7, autoComplete: 'new-password', required: true, value: confirmPassword, onChange: ev => setConfirmPassword(ev.target.value) })
+          ),
+          e('label', null, 'Avatar URL (t\u00f9y ch\u1ecdn)',
+            e('input', { type: 'url', value: avatar, onChange: ev => setAvatar(ev.target.value) })
+          ),
+          e('button', { className: 'primary-button', type: 'submit' }, 'T\u1ea1o t\u00e0i kho\u1ea3n')
+        ),
+        e('p', { className: 'auth-switch' },
+          '\u0110\u00e3 c\u00f3 t\u00e0i kho\u1ea3n? ',
+          e('a', { href: '#/login' }, '\u0110\u0103ng nh\u1eadp')
+        )
+      )
+    )
+  );
 }
 
-function renderMatchCard(match) {
-  return `
-    <a class="match-card" href="#/match/${match.id}">
-      <span class="badge ${statusClass(match)}">${escapeHtml(statusLabel(match))}</span>
-      <div class="match-league">${escapeHtml(match.leagueLabel || match.league)}</div>
-      <div class="teams">
-        ${renderTeam(match.homeTeam, match.homeLogo)}
-        <strong class="score">${escapeHtml(scoreLine(match))}</strong>
-        ${renderTeam(match.awayTeam, match.awayLogo)}
-      </div>
-      <div class="match-meta">
-        <span>${escapeHtml(formatDateTime(match.kickoffTime))}</span>
-        <span>${match.locked ? 'Locked' : 'Open'}</span>
-      </div>
-      ${match.userPrediction ? `<div class="prediction-pill">${escapeHtml(predictionStatus(match.userPrediction))}</div>` : ''}
-    </a>
-  `;
+// ─── Notifications ────────────────────────────────────────────────────────────
+function NotificationsSection() {
+  return e('section', { className: 'panel' },
+    e('div', { className: 'section-head' },
+      e('h2', null, 'Notifications'),
+      e('span', null, formatNumber(state.notifications.length))
+    ),
+    state.notifications.length
+      ? e('div', { className: 'stack-list' },
+          state.notifications.slice(0, 8).map((item, i) =>
+            e('div', { key: i, className: 'history-row' },
+              e('div', null, e('b', null, item.title), e('span', null, item.message))
+            )
+          )
+        )
+      : e('div', { className: 'empty' }, 'No notifications.')
+  );
 }
 
-function renderTeam(name, logo) {
-  return `
-    <span class="team">
-      ${logo ? `<img src="${escapeHtml(logo)}" alt="" />` : `<span class="avatar">${escapeHtml(initials(name))}</span>`}
-      <span>${escapeHtml(name)}</span>
-    </span>
-  `;
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+async function boot() {
+  bindEvents();
+  await loadSession();
+  await refreshPublicData();
+  await loadRouteData();
+  openStream();
+  root?.render(e(App, null));
+  window.setInterval(refreshPublicDataQuiet, 30000);
 }
 
-function renderLeaderboardMini() {
-  if (!state.leaderboard.length) return `<div class="empty">No players yet.</div>`;
-  return `<div class="rank-list">${state.leaderboard.slice(0, 6).map(renderRankRow).join('')}</div>`;
-}
-
-function renderRankRow(row) {
-  return `
-    <div class="rank-row">
-      <b>#${row.rank}</b>
-      <span class="avatar">${escapeHtml(initials(row.username))}</span>
-      <span>${escapeHtml(row.username)}</span>
-      <strong>${formatNumber(row.points)} pts</strong>
-    </div>
-  `;
-}
-
-function renderLeaderboardPage() {
-  return `
-    ${renderToast()}
-    <section class="page-head">
-      <div><p class="eyebrow">Competition</p><h1>Leaderboard</h1></div>
-      <div class="segmented">
-        ${['all-time', 'week', 'month'].map((period) => `<button class="${state.leaderboardPeriod === period ? 'active' : ''}" data-action="period" data-period="${period}">${period}</button>`).join('')}
-      </div>
-    </section>
-    <section class="panel">
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Rank</th><th>User</th><th>Points</th><th>Accuracy</th><th>Matches</th></tr></thead>
-          <tbody>
-            ${state.leaderboard.map((row) => `
-              <tr>
-                <td>#${row.rank}</td>
-                <td><span class="cell-user"><span class="avatar">${escapeHtml(initials(row.username))}</span>${escapeHtml(row.username)}</span></td>
-                <td>${formatNumber(state.leaderboardPeriod === 'all-time' ? row.points : row.periodPoints)}</td>
-                <td>${row.accuracy}%</td>
-                <td>${formatNumber(row.predictions)}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  `;
-}
-
-function renderMatchPage() {
-  const [, id] = routeParts();
-  const match = state.detail || state.matches.find((item) => String(item.id) === String(id));
-  if (!match) return `${renderToast()}<div class="empty page-empty">Match not found.</div>`;
-  return `
-    ${renderToast()}
-    <section class="match-hero">
-      <div>
-        <p class="eyebrow">${escapeHtml(match.leagueLabel || match.league)}</p>
-        <h1>${escapeHtml(match.homeTeam)} vs ${escapeHtml(match.awayTeam)}</h1>
-        <p>${escapeHtml(formatDateTime(match.kickoffTime))} ${match.venue ? ` - ${escapeHtml(match.venue)}` : ''}</p>
-      </div>
-      <div class="big-score">
-        <span>${formatNumber(match.homeScore)}</span>
-        <b>${match.status === 'pre' && !match.isLive ? 'vs' : '-'}</b>
-        <span>${formatNumber(match.awayScore)}</span>
-      </div>
-      <span class="badge ${statusClass(match)}">${escapeHtml(statusLabel(match))}</span>
-    </section>
-    <section class="grid two">
-      <div class="panel">
-        <div class="section-head"><h2>Bảng cược</h2><span>${match.locked ? 'Khóa' : 'Mở'}</span></div>
-        ${renderPredictionBoxGrouped(match)}
-      </div>
-      <div class="panel">
-        <div class="section-head"><h2>Chat phòng</h2><span>${formatNumber(state.chat.length)}</span></div>
-        ${renderChat(match)}
-      </div>
-    </section>
-  `;
-}
-
-function renderPredictionBoxGrouped(match) {
-  if (!state.me) {
-    return `<div class="empty">Đăng nhập để đặt kèo. <a href="#/auth">Đăng nhập</a></div>`;
-  }
-  const placed = match.userPredictions || (match.userPrediction ? [match.userPrediction] : []);
-  if (match.locked) return `${renderPlacedBetsGrouped(placed)}<div class="empty">Cửa cược đã đóng.</div>`;
-  const maxBet = Math.max(1, Math.floor(Number(state.me.walletBalance || state.me.points || 0) * 0.25));
-  const markets = Array.isArray(match.markets) ? match.markets : [];
-  if (!markets.length) {
-    return `
-      ${renderPlacedBetsGrouped(placed)}
-      <div class="empty">Chưa có odds từ ESPN cho trận này.</div>
-    `;
-  }
-  const sections = buildMarketSections(markets);
-  const visibleSections = state.matchMarketType === 'all'
-    ? sections
-    : sections.filter((section) => section.key === state.matchMarketType);
-  const activeMarkets = visibleSections.flatMap((section) => section.markets);
-  const draft = state.betDrafts[String(match.id)] || {};
-  const defaultPick = findDraftPick(match.id, activeMarkets.length ? activeMarkets : markets) || findFirstPick(activeMarkets.length ? activeMarkets : markets);
-  const stakeValue = Math.max(1, Math.min(maxBet, Number(draft.stake || 100)));
-  const canSubmit = Boolean(defaultPick);
-  return `
-    ${renderPlacedBetsGrouped(placed)}
-    <form class="bet-form" data-form="prediction">
-      <input type="hidden" name="matchId" value="${match.id}" />
-      <div class="bet-meta">
-        <span class="chip">${formatNumber(markets.length)} kèo</span>
-        <span class="chip">Tối đa ${formatNumber(maxBet)} điểm</span>
-        <span class="chip">Điểm ảo</span>
-      </div>
-      <div class="bet-preview" data-bet-preview>
-        <div>
-          <b data-preview-title>${escapeHtml(defaultPick?.market?.title || 'Chưa chọn kèo')}</b>
-          <span data-preview-label>${escapeHtml(defaultPick?.option?.label || 'Chọn field bên dưới')}</span>
-        </div>
-        <div class="bet-preview-stats">
-          <strong data-preview-odds>${escapeHtml(renderOddsValue(defaultPick?.option?.odds))}</strong>
-          <span data-preview-return>${escapeHtml(renderBetProjection(stakeValue, defaultPick?.option?.odds))}</span>
-        </div>
-      </div>
-      <div class="market-tabs" role="tablist" aria-label="Market filters">
-        ${renderMarketFilters(sections)}
-      </div>
-      <div class="market-board">
-        ${visibleSections.map((section, index) => renderMarketSection(section, index === 0, defaultPick)).join('')}
-      </div>
-      <div class="stake-row">
-        <label>Điểm cược<input name="betPoints" type="number" min="1" max="${maxBet}" value="${stakeValue}" required /></label>
-        <div class="stake-pills">
-          ${[25, 50, 100].filter((amount) => amount <= maxBet).map((amount) => `<button type="button" class="chip" data-action="stake-preset" data-amount="${amount}">${formatNumber(amount)}</button>`).join('')}
-          <button type="button" class="chip" data-action="stake-preset" data-amount="max">Max</button>
-        </div>
-        <button class="primary-button" type="submit" ${canSubmit ? '' : 'disabled'}>Đặt kèo</button>
-      </div>
-      <div class="market-note">x1.76 nghĩa là cược 100, nhận 176. +340 hoặc 5/7 chỉ là kiểu ghi odds khác, app đổi hết sang x để dễ đọc.</div>
-    </form>
-  `;
-}
-
-function renderPlacedBetsGrouped(predictions) {
-  if (!predictions.length) return '';
-  return `
-    <div class="placed-bets">
-      ${predictions.map((prediction) => `
-        <div class="placed-bet">
-          <div>
-            <b>${escapeHtml(prediction.market?.title || 'Kèo cũ')}</b>
-            <span>${escapeHtml(prediction.market?.label || `${prediction.predictedHomeScore}-${prediction.predictedAwayScore}`)} @ ${escapeHtml(renderOddsLabelGrouped(prediction.market))}</span>
-          </div>
-          <strong>${escapeHtml(predictionStatus(prediction))}</strong>
-        </div>
-      `).join('')}
-    </div>
-  `;
-}
-
-function renderMarketFilters(sections) {
-  const filters = [
-    {
-      key: 'all',
-      label: 'Tất cả',
-      count: sections.reduce((total, section) => total + section.markets.length, 0)
-    },
-    ...sections.map((section) => ({
-      key: section.key,
-      label: section.label,
-      count: section.markets.length
-    }))
-  ];
-  return filters.map((filter) => `
-    <button
-      type="button"
-      class="market-tab ${state.matchMarketType === filter.key ? 'active' : ''}"
-      data-action="market-filter"
-      data-market-type="${filter.key}"
-      aria-pressed="${state.matchMarketType === filter.key ? 'true' : 'false'}"
-    >
-      <span>${escapeHtml(filter.label)}</span>
-      <small>${formatNumber(filter.count)}</small>
-    </button>
-  `).join('');
-}
-
-function renderMarketSection(section, open = false, defaultPick = null) {
-  const hasDefaultPick = defaultPick && section.markets.some((market) => market.key === defaultPick.marketKey);
-  return `
-    <details class="market-group" ${open ? 'open' : ''}>
-      <summary>
-        <div>
-          <b>${escapeHtml(section.label)}</b>
-          <span>${formatNumber(section.markets.length)} kèo · ${formatNumber(section.providers.length)} nhà cung cấp</span>
-        </div>
-        <span class="group-arrow">⌄</span>
-      </summary>
-      <div class="market-group-body">
-        ${section.markets.map((market) => renderMarket(market, hasDefaultPick ? defaultPick : null)).join('')}
-      </div>
-    </details>
-  `;
-}
-
-function renderMarket(market, defaultPick = null) {
-  if (market.disabled) {
-    return `
-      <div class="market disabled">
-        <div class="market-title"><b>${escapeHtml(market.title)}</b><span>Chưa mở</span></div>
-        <p>${escapeHtml(market.description)}</p>
-      </div>
-    `;
-  }
-  return `
-    <div class="market">
-      <div class="market-title"><b>${escapeHtml(market.title)}</b><span>${escapeHtml(market.description)}</span></div>
-      <div class="market-options">
-        ${market.options.map((option) => {
-          const checked = defaultPick && market.key === defaultPick.marketKey && option.key === defaultPick.optionKey ? 'checked' : '';
-          return `
-            <label class="market-option">
-              <input
-                type="radio"
-                name="pick"
-                value="${escapeHtml(`${market.key}|${option.key}`)}"
-                ${checked}
-                required
-                data-market-title="${escapeHtml(market.title)}"
-                data-option-label="${escapeHtml(option.label)}"
-                data-odds="${escapeHtml(String(option.odds ?? ''))}"
-              />
-              <span>${escapeHtml(option.label)}</span>
-              <b>${escapeHtml(renderOddsValue(option.odds))}</b>
-            </label>
-          `;
-        }).join('')}
-      </div>
-    </div>
-  `;
-}
-
-function renderOddsLabelGrouped(source) {
-  return renderOddsValue(source?.odds);
-}
-
-function renderChat(match) {
-  return `
-    <div class="chat-list">
-      ${state.chat.length ? state.chat.map((message) => `
-        <div class="chat-message">
-          <span class="avatar">${escapeHtml(initials(message.user?.username || 'User'))}</span>
-          <div>
-            <b>${escapeHtml(message.user?.username || 'User')}</b>
-            <p>${escapeHtml(message.message)}</p>
-          </div>
-          ${state.me?.role === 'admin' ? `<button class="icon-button danger" data-action="delete-chat" data-message-id="${message.id}" title="Delete">X</button>` : ''}
-        </div>
-      `).join('') : '<div class="empty">No messages yet.</div>'}
-    </div>
-    ${state.me ? `
-      <form class="chat-form" data-form="chat">
-        <input type="hidden" name="matchId" value="${match.id}" />
-        <input name="message" maxlength="280" placeholder="Type message" required />
-        <button class="secondary-button" type="submit">Send</button>
-      </form>
-    ` : '<div class="empty">Login to chat.</div>'}
-  `;
-}
-
-function renderProfilePage() {
-  if (!state.me) return `${renderToast()}<section class="panel"><div class="empty">Login to view profile. <a href="#/auth">Login</a></div></section>`;
-  const rank = state.leaderboard.find((row) => String(row.id) === String(state.me.id));
-  return `
-    ${renderToast()}
-    <section class="page-head">
-      <div><p class="eyebrow">Profile</p><h1>${escapeHtml(state.me.username)}</h1></div>
-      <span class="avatar xl">${escapeHtml(initials(state.me.username))}</span>
-    </section>
-    <section class="stats-grid">
-      <div class="stat"><span>Points</span><b>${formatNumber(state.me.points)}</b></div>
-      <div class="stat"><span>Rank</span><b>${rank ? `#${rank.rank}` : '-'}</b></div>
-      <div class="stat"><span>Bets</span><b>${formatNumber(state.predictions.length)}</b></div>
-      <div class="stat"><span>Transactions</span><b>${formatNumber(state.walletHistory.length)}</b></div>
-    </section>
-    <section class="grid two">
-      <div class="panel">
-        <div class="section-head"><h2>Bet history</h2></div>
-        ${renderPredictionsTableGrouped()}
-      </div>
-      <div class="panel">
-        <div class="section-head"><h2>Wallet history</h2></div>
-        ${renderWalletHistory()}
-      </div>
-    </section>
-  `;
-}
-
-function renderPredictionsTableGrouped() {
-  if (!state.predictions.length) return `<div class="empty">No bets yet.</div>`;
-  return `<div class="stack-list">${state.predictions.slice(0, 12).map((prediction) => `
-    <div class="history-row">
-      <div>
-        <b>${escapeHtml(prediction.match ? `${prediction.match.homeTeam} vs ${prediction.match.awayTeam}` : `Match #${prediction.matchId}`)}</b>
-        <span>${escapeHtml(prediction.market?.title || 'Kèo cũ')} | ${escapeHtml(prediction.market?.label || `${prediction.predictedHomeScore}-${prediction.predictedAwayScore}`)} | ${escapeHtml(renderOddsLabelGrouped(prediction.market))} | ${escapeHtml(prediction.status)}</span>
-      </div>
-      <strong>${formatNumber(prediction.rewardPoints)} pts</strong>
-    </div>
-  `).join('')}</div>`;
-}
-
-function renderWalletHistory() {
-  if (!state.walletHistory.length) return `<div class="empty">No transactions yet.</div>`;
-  return `<div class="stack-list">${state.walletHistory.slice(0, 12).map((tx) => `
-    <div class="history-row">
-      <div>
-        <b>${escapeHtml(tx.type)}</b>
-        <span>${escapeHtml(clampText(tx.note))}</span>
-      </div>
-      <strong class="${Number(tx.amount) >= 0 ? 'good' : 'bad'}">${Number(tx.amount) >= 0 ? '+' : ''}${formatNumber(tx.amount)}</strong>
-    </div>
-  `).join('')}</div>`;
-}
-
-function renderPredictionsTable() {
-  if (!state.predictions.length) return `<div class="empty">No bets yet.</div>`;
-  return `<div class="stack-list">${state.predictions.slice(0, 12).map((prediction) => `
-    <div class="history-row">
-      <div>
-        <b>${escapeHtml(prediction.match ? `${prediction.match.homeTeam} vs ${prediction.match.awayTeam}` : `Match #${prediction.matchId}`)}</b>
-        <span>${escapeHtml(prediction.market?.title || 'Kèo cũ')} | ${escapeHtml(prediction.market?.label || '')} | ${escapeHtml(prediction.status)} | ${escapeHtml(renderOddsLabelGrouped(prediction.market))}</span>
-      </div>
-      <strong>${formatNumber(prediction.rewardPoints)} pts</strong>
-    </div>
-  `).join('')}</div>`;
-}
-
-function renderAdminPage() {
-  if (!state.me) return `${renderToast()}<div class="empty page-empty">Login required.</div>`;
-  if (state.me.role !== 'admin') return `${renderToast()}<div class="empty page-empty">Admin only.</div>`;
-  if (!state.admin) return `${renderToast()}<div class="empty page-empty">Loading admin data.</div>`;
-  return `
-    ${renderToast()}
-    <section class="page-head">
-      <div><p class="eyebrow">Control room</p><h1>Admin dashboard</h1></div>
-      <button class="primary-button" data-action="sync">Force ESPN sync</button>
-    </section>
-    <section class="panel">
-      <div class="section-head"><h2>Point adjustment</h2></div>
-      <form class="form-grid" data-form="admin-points">
-        <label>User<select name="userId" required>${state.admin.users.map((user) => `<option value="${user.id}">${escapeHtml(user.username)} (${formatNumber(user.points)} pts)</option>`).join('')}</select></label>
-        <label>Mode<select name="mode"><option value="add">Add</option><option value="deduct">Deduct</option></select></label>
-        <label>Amount<input name="amount" type="number" min="1" value="100" required /></label>
-        <label>Note<input name="note" maxlength="120" placeholder="Admin adjustment" /></label>
-        <button class="secondary-button" type="submit">Update points</button>
-      </form>
-    </section>
-    <section class="panel">
-      <div class="section-head"><h2>Users</h2><span>${formatNumber(state.admin.users.length)}</span></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>User</th><th>Role</th><th>Points</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody>${state.admin.users.map((user) => `
-            <tr>
-              <td>${escapeHtml(user.username)}</td>
-              <td>
-                <select class="role-select" data-role-select data-user-id="${user.id}" ${String(user.id) === String(state.me.id) ? 'disabled' : ''}>
-                  <option value="user" ${user.role === 'user' ? 'selected' : ''}>user</option>
-                  <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>admin</option>
-                </select>
-              </td>
-              <td>${formatNumber(user.points)}</td>
-              <td>${user.banned ? 'Banned' : 'Active'}</td>
-              <td class="actions">
-                <button class="ghost-button" data-action="${user.banned ? 'unban' : 'ban'}" data-user-id="${user.id}">${user.banned ? 'Unban' : 'Ban'}</button>
-                <button class="ghost-button danger" data-action="reset-user" data-user-id="${user.id}">Reset</button>
-                ${String(user.id) !== String(state.me.id) ? `<button class="ghost-button danger" data-action="delete-user" data-user-id="${user.id}" data-username="${escapeHtml(user.username)}">Delete</button>` : ''}
-              </td>
-            </tr>
-          `).join('')}</tbody>
-        </table>
-      </div>
-    </section>
-    <section class="panel">
-      <div class="section-head"><h2>Recent transactions</h2></div>
-      ${state.admin.transactions.length ? `<div class="stack-list">${state.admin.transactions.slice(0, 20).map((tx) => `
-        <div class="history-row">
-          <div><b>User #${tx.userId} - ${escapeHtml(tx.type)}</b><span>${escapeHtml(tx.note)}</span></div>
-          <strong class="${Number(tx.amount) >= 0 ? 'good' : 'bad'}">${Number(tx.amount) >= 0 ? '+' : ''}${formatNumber(tx.amount)}</strong>
-        </div>
-      `).join('')}</div>` : '<div class="empty">No transactions.</div>'}
-    </section>
-    <section class="panel">
-      <div class="section-head"><h2>Pending bets</h2><span>${formatNumber(state.admin.predictions.length)}</span></div>
-      ${state.admin.predictions.length ? `<div class="stack-list">${state.admin.predictions.map((prediction) => `
-        <div class="history-row">
-          <div>
-            <b>${escapeHtml(prediction.user?.username || `User #${prediction.userId}`)} - ${escapeHtml(prediction.market?.title || 'Bet')}</b>
-            <span>${escapeHtml(prediction.match ? `${prediction.match.homeTeam} vs ${prediction.match.awayTeam}` : `Match #${prediction.matchId}`)} | ${escapeHtml(prediction.market?.label || '')} | ${escapeHtml(renderOddsValue(prediction.market?.odds))} | ${escapeHtml(prediction.status)}</span>
-          </div>
-          <strong>${formatNumber(prediction.rewardPoints)} pts</strong>
-        </div>
-      `).join('')}</div>` : '<div class="empty">No pending bets.</div>'}
-    </section>
-  `;
-}
-
-function renderAuthPage() {
-  return `
-    ${renderToast()}
-    <section class="auth-grid">
-      <div class="panel">
-        <div class="section-head"><h2>Login</h2></div>
-        <form class="form-grid" data-form="login">
-          <label>Email hoặc tên đăng nhập<input name="email" type="text" autocomplete="username" required /></label>
-          <label>Password<input name="password" type="password" required /></label>
-          <label class="check"><input name="remember" type="checkbox" checked /> Remember</label>
-          <button class="primary-button" type="submit">Login</button>
-        </form>
-      </div>
-      <div class="panel">
-        <div class="section-head"><h2>Register</h2></div>
-        <form class="form-grid" data-form="register">
-          <label>Username<input name="username" minlength="2" required /></label>
-          <label>Email<input name="email" type="email" required /></label>
-          <label>Password<input name="password" type="password" minlength="7" required /></label>
-          <label>Avatar URL<input name="avatar" type="url" /></label>
-          <button class="secondary-button" type="submit">Create account</button>
-        </form>
-      </div>
-    </section>
-  `;
-}
-
-function renderNotifications() {
-  return `
-    <section class="panel">
-      <div class="section-head"><h2>Notifications</h2><span>${formatNumber(state.notifications.length)}</span></div>
-      ${state.notifications.length ? `<div class="stack-list">${state.notifications.slice(0, 8).map((item) => `
-        <div class="history-row">
-          <div><b>${escapeHtml(item.title)}</b><span>${escapeHtml(item.message)}</span></div>
-        </div>
-      `).join('')}</div>` : '<div class="empty">No notifications.</div>'}
-    </section>
-  `;
-}
-
-function renderToast() {
-  return state.toast ? `<div class="toast ${state.toast.tone}">${escapeHtml(state.toast.message)}</div>` : '';
-}
-
-boot().catch((error) => {
-  setToast(error.message || 'App failed to start', 'bad');
-  render();
+boot().catch(err => {
+  console.error(err);
+  root?.render(e('div', { className: 'empty page-empty' }, 'App failed to start. Check console.'));
 });
-

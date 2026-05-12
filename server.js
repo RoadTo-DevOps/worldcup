@@ -3,6 +3,15 @@ const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 require('./src/config/env');
+
+// Prevent unhandled errors from crashing the process
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason);
+});
+
 const {
   PUBLIC_DIR,
   DB_PATH,
@@ -853,6 +862,7 @@ async function handleApi(req, res, urlObj) {
       if (!user) return;
       const history = db.walletTransactions
         .filter((transaction) => String(transaction.userId) === String(user.id))
+        .filter((transaction) => ['admin_add', 'admin_deduct'].includes(String(transaction.type || '')))
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       return ok(res, 'Wallet history', { history });
     }

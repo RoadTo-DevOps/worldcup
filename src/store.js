@@ -22,6 +22,7 @@ const retention = {
   chatDays: readIntEnv('CHAT_HISTORY_DAYS', 30),
   notificationDays: readIntEnv('NOTIFICATION_HISTORY_DAYS', 30),
   leaderboardDays: readIntEnv('LEADERBOARD_HISTORY_DAYS', 30),
+  maxPredictionsPerUser: readIntEnv('MAX_PREDICTIONS_PER_USER', 30),
   maxSettledPredictions: readIntEnv('MAX_SETTLED_PREDICTIONS', 1000),
   maxWalletTransactions: readIntEnv('MAX_WALLET_TRANSACTIONS', 2000),
   maxChatMessages: readIntEnv('MAX_CHAT_MESSAGES', 500),
@@ -208,13 +209,31 @@ function pruneDb(db) {
 function prunePredictions(predictions) {
   if (!Array.isArray(predictions)) return [];
   const cutoff = cutoffTime(retention.predictionDays);
-  const pending = predictions.filter((prediction) => prediction.status === 'pending');
-  let settled = predictions.filter((prediction) => {
-    if (prediction.status === 'pending') return false;
-    return !cutoff || itemTime(prediction) >= cutoff;
-  });
-  settled = keepNewest(settled, retention.maxSettledPredictions);
-  return sortByCreatedAt([...pending, ...settled]);
+  const byUser = new Map();
+
+  for (const prediction of predictions) {
+    const userKey = String(prediction?.userId || 'anonymous');
+    if (!byUser.has(userKey)) byUser.set(userKey, []);
+    byUser.get(userKey).push(prediction);
+  }
+
+  const nextPredictions = [];
+  for (const userPredictions of byUser.values()) {
+    const pending = userPredictions.filter((prediction) => prediction.status === 'pending');
+    let settled = userPredictions.filter((prediction) => {
+      if (prediction.status === 'pending') return false;
+      return !cutoff || itemTime(prediction) >= cutoff;
+    });
+
+    const maxSettledForUser = retention.maxPredictionsPerUser
+      ? Math.max(Math.min(retention.maxPredictionsPerUser - pending.length, retention.maxSettledPredictions), 0)
+      : retention.maxSettledPredictions;
+
+    settled = keepNewest(settled, maxSettledForUser);
+    nextPredictions.push(...pending, ...settled);
+  }
+
+  return sortByCreatedAt(nextPredictions);
 }
 
 function pruneTimedList(items, days, maxCount) {

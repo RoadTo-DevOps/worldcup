@@ -237,6 +237,34 @@ select:focus {
   gap: 18px;
 }
 
+.auth-solo {
+  display: flex;
+  justify-content: center;
+  padding: 24px 16px;
+}
+
+.auth-panel {
+  width: 100%;
+  max-width: 420px;
+}
+
+.auth-switch {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.auth-switch a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.auth-switch a:hover {
+  text-decoration: underline;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -454,6 +482,122 @@ select:focus {
 .history-row span {
   color: var(--muted);
   font-size: 13px;
+}
+
+.history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.score-result {
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel-2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  display: inline-block;
+  margin-right: 8px;
+}
+
+.score-result.score-live {
+  background: rgba(245, 184, 75, 0.18);
+  color: var(--amber);
+}
+
+.score-result.score-final {
+  background: rgba(54, 211, 153, 0.16);
+  color: var(--green);
+}
+
+.match-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.match-state-live {
+  background: rgba(245, 184, 75, 0.2);
+  color: var(--amber);
+}
+
+.match-state-final {
+  background: rgba(54, 211, 153, 0.2);
+  color: var(--green);
+}
+
+.match-state-pending {
+  background: rgba(102, 166, 255, 0.18);
+  color: var(--blue);
+}
+
+.pred-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 60px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.status-badge.status-won {
+  background: rgba(54, 211, 153, 0.2);
+  color: var(--green);
+  border: 1px solid var(--green);
+}
+
+.status-badge.status-lost {
+  background: rgba(255, 107, 107, 0.2);
+  color: var(--red);
+  border: 1px solid var(--red);
+}
+
+.status-badge.status-pending {
+  background: rgba(245, 184, 75, 0.2);
+  color: var(--amber);
+  border: 1px solid var(--amber);
+}
+
+.status-badge.status-push {
+  background: rgba(102, 166, 255, 0.2);
+  color: var(--blue);
+  border: 1px solid var(--blue);
+}
+
+.pred-won {
+  border-left: 3px solid var(--green);
+}
+
+.pred-lost {
+  border-left: 3px solid var(--red);
+}
+
+.pred-pending {
+  border-left: 3px solid var(--amber);
+}
+
+.pred-push {
+  border-left: 3px solid var(--blue);
 }
 
 .form-grid {
