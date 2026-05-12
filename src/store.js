@@ -19,6 +19,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const retention = {
   predictionDays: readIntEnv('PREDICTION_HISTORY_DAYS', 180),
   walletDays: readIntEnv('WALLET_HISTORY_DAYS', 180),
+  matchDays: readIntEnv('MATCH_HISTORY_DAYS', 7),
   chatDays: readIntEnv('CHAT_HISTORY_DAYS', 30),
   notificationDays: readIntEnv('NOTIFICATION_HISTORY_DAYS', 30),
   leaderboardDays: readIntEnv('LEADERBOARD_HISTORY_DAYS', 30),
@@ -198,12 +199,23 @@ function maxId(items) {
 
 function pruneDb(db) {
   if (!db) return db;
+  db.matches = pruneMatches(db.matches);
   db.predictions = prunePredictions(db.predictions);
   db.walletTransactions = pruneTimedList(db.walletTransactions, retention.walletDays, retention.maxWalletTransactions);
   db.chatMessages = pruneTimedList(db.chatMessages, retention.chatDays, retention.maxChatMessages);
   db.notifications = pruneTimedList(db.notifications, retention.notificationDays, retention.maxNotifications);
   db.leaderboardHistory = pruneTimedList(db.leaderboardHistory, retention.leaderboardDays, retention.maxLeaderboardHistory);
   return db;
+}
+
+function pruneMatches(matches) {
+  if (!Array.isArray(matches)) return [];
+  if (!retention.matchDays) return matches;
+  const cutoff = cutoffTime(retention.matchDays);
+  return matches.filter((match) => {
+    const matchTime = itemTime(match);
+    return !cutoff || matchTime >= cutoff;
+  });
 }
 
 function prunePredictions(predictions) {
