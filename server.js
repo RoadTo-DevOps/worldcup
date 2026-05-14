@@ -633,6 +633,18 @@ function parsePositiveNumber(value) {
   return Number.isFinite(num) && num >= 0 ? num : null;
 }
 
+function isValidAvatarUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return true;
+  if (text.length > 500) return false;
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 function serveStatic(req, res, pathname) {
   const safePath = pathname === '/' ? '/index.html' : pathname;
   const resolved = path.normalize(path.join(PUBLIC_DIR, safePath));
@@ -644,6 +656,8 @@ function serveStatic(req, res, pathname) {
   const filePath = fs.existsSync(resolved) && fs.statSync(resolved).isFile()
     ? resolved
     : path.join(PUBLIC_DIR, 'index.html');
+  const isHtml = filePath.endsWith('index.html');
+  const cacheControl = isHtml ? 'no-store' : 'no-store';
   fs.readFile(filePath, (err, content) => {
     if (err) {
       res.writeHead(404);
@@ -652,7 +666,7 @@ function serveStatic(req, res, pathname) {
     }
     res.writeHead(200, {
       'content-type': contentType(filePath),
-      'cache-control': filePath.endsWith('index.html') ? 'no-store' : 'public, max-age=3600',
+      'cache-control': cacheControl,
       'x-content-type-options': 'nosniff',
       'x-frame-options': 'DENY',
       'referrer-policy': 'no-referrer'
@@ -735,6 +749,49 @@ async function handleApi(req, res, urlObj) {
       const user = requireUser(req, res);
       if (!user) return;
       return ok(res, 'Current user', {
+        user: toSafeUser(user)
+      });
+    }
+
+    if (req.method === 'PATCH' && pathname === '/api/profile') {
+      const user = requireUser(req, res);
+      if (!user) return;
+      const body = await readBody(req);
+      const avatar = String(body.avatar || '').trim();
+
+      if (!isValidAvatarUrl(avatar)) {
+        return fail(res, 400, 'Avatar URL must be http(s) and <= 500 chars');
+      }
+
+      user.avatar = avatar;
+      user.updatedAt = new Date().toISOString();
+      maybePersist();
+      return ok(res, 'Profile updated', {
+        user: toSafeUser(user)
+      });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/profile/password') {
+      const user = requireUser(req, res);
+      if (!user) return;
+      const body = await readBody(req);
+      const currentPassword = String(body.currentPassword || '');
+      const newPassword = String(body.newPassword || '');
+
+      if (!verifyPasswordSync(currentPassword, user.passwordHash)) {
+        return fail(res, 401, 'Current password is incorrect');
+      }
+      if (!isStrongPassword(newPassword)) {
+        return fail(res, 400, 'Password too weak');
+      }
+      if (currentPassword === newPassword) {
+        return fail(res, 400, 'New password must be different');
+      }
+
+      user.passwordHash = makePasswordRecord(newPassword);
+      user.updatedAt = new Date().toISOString();
+      maybePersist();
+      return ok(res, 'Password updated', {
         user: toSafeUser(user)
       });
     }

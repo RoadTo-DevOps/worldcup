@@ -81,6 +81,16 @@ button {
   flex: 0 0 auto;
 }
 
+.avatar-image {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid rgba(54, 211, 153, 0.32);
+  background: #1f3134;
+  flex: 0 0 auto;
+}
+
 .brand strong,
 .brand small {
   display: block;
@@ -1011,6 +1021,30 @@ th {
   width: 64px;
   height: 64px;
   font-size: 22px;
+}
+
+.avatar-image.xl {
+  width: 64px;
+  height: 64px;
+}
+
+.form-grid .full {
+  grid-column: 1 / -1;
+}
+
+.avatar-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #0f171f;
+}
+
+.avatar-preview span {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .segmented {

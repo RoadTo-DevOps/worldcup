@@ -546,13 +546,39 @@ function TeamDisplay({ name, logo }) {
   );
 }
 
+function UserAvatar({ user, avatar, size = '' }) {
+  const [imgFailed, setImgFailed] = React.useState(false);
+  const className = size ? ` ${size}` : '';
+  const avatarUrl = String((avatar ?? user?.avatar) || '').trim();
+
+  React.useEffect(() => {
+    setImgFailed(false);
+  }, [avatarUrl]);
+
+  if (avatarUrl && !imgFailed) {
+    return e('img', {
+      className: `avatar-image${className}`,
+      src: avatarUrl,
+      alt: `${user?.username || 'User'} avatar`,
+      onError: () => setImgFailed(true)
+    });
+  }
+  return e('span', { className: `avatar${className}` }, initials(user?.username || 'User'));
+}
+
+function leaderboardAvatar(row) {
+  if (row?.avatar) return row.avatar;
+  if (state.me && String(state.me.id) === String(row?.id)) return String(state.me.avatar || '');
+  return '';
+}
+
 function LeaderboardMini() {
   if (!state.leaderboard.length) return e('div', { className: 'empty' }, 'No players yet.');
   return e('div', { className: 'rank-list' },
     state.leaderboard.slice(0, 6).map(row =>
       e('div', { key: row.id, className: 'rank-row' },
         e('b', null, `#${row.rank}`),
-        e('span', { className: 'avatar' }, initials(row.username)),
+        e(UserAvatar, { user: { username: row.username }, avatar: leaderboardAvatar(row) }),
         e('span', null, row.username),
         e('strong', null, `${formatNumber(row.points)} pts`)
       )
@@ -596,7 +622,7 @@ function LeaderboardPage() {
                 e('td', null, `#${row.rank}`),
                 e('td', null,
                   e('span', { className: 'cell-user' },
-                    e('span', { className: 'avatar' }, initials(row.username)),
+                    e(UserAvatar, { user: { username: row.username }, avatar: leaderboardAvatar(row) }),
                     row.username
                   )
                 ),
@@ -873,7 +899,7 @@ function ChatBox({ match }) {
       state.chat.length
         ? state.chat.map(msg =>
             e('div', { key: msg.id, className: 'chat-message' },
-              e('span', { className: 'avatar' }, initials(msg.user?.username || 'User')),
+              e(UserAvatar, { user: { username: msg.user?.username || 'User' }, avatar: msg.user?.avatar || '' }),
               e('div', null,
                 e('b', null, msg.user?.username || 'User'),
                 e('p', null, msg.message)
@@ -899,6 +925,15 @@ function ChatBox({ match }) {
 
 // ─── Profile page ─────────────────────────────────────────────────────────────
 function ProfilePage() {
+  const [avatar, setAvatar] = React.useState(state.me?.avatar || '');
+  const [currentPassword, setCurrentPassword] = React.useState('');
+  const [newPassword, setNewPassword] = React.useState('');
+  const [confirmPassword, setConfirmPassword] = React.useState('');
+
+  React.useEffect(() => {
+    setAvatar(state.me?.avatar || '');
+  }, [state.me?.id, state.me?.avatar]);
+
   if (!state.me) return e(React.Fragment, null,
     e(ToastBar, null),
     e('section', { className: 'panel' },
@@ -907,18 +942,111 @@ function ProfilePage() {
   );
 
   const rank = state.leaderboard.find(r => String(r.id) === String(state.me.id));
+  const avatarPreview = String(avatar || '').trim() || String(state.me.avatar || '').trim();
+
+  const handleProfileSubmit = async ev => {
+    ev.preventDefault();
+    await runTask(async () => {
+      const data = await api('/api/profile', {
+        method: 'PATCH',
+        body: { avatar }
+      });
+      state.me = data.user;
+      await refreshPublicData();
+      await loadRouteData();
+    }, 'Profile updated');
+  };
+
+  const handlePasswordSubmit = async ev => {
+    ev.preventDefault();
+    if (newPassword !== confirmPassword) {
+      setToast('Confirm password does not match.', 'bad');
+      notify();
+      return;
+    }
+    await runTask(async () => {
+      const data = await api('/api/profile/password', {
+        method: 'POST',
+        body: { currentPassword, newPassword }
+      });
+      state.me = data.user;
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    }, 'Password updated');
+  };
 
   return e(React.Fragment, null,
     e(ToastBar, null),
     e('section', { className: 'page-head' },
       e('div', null, e('p', { className: 'eyebrow' }, 'Profile'), e('h1', null, state.me.username)),
-      e('span', { className: 'avatar xl' }, initials(state.me.username))
+      e(UserAvatar, { user: state.me, avatar: state.me.avatar, size: 'xl' })
     ),
     e('section', { className: 'stats-grid' },
       e('div', { className: 'stat' }, e('span', null, 'Points'), e('b', null, formatNumber(state.me.points))),
       e('div', { className: 'stat' }, e('span', null, 'Rank'), e('b', null, rank ? `#${rank.rank}` : '-')),
       e('div', { className: 'stat' }, e('span', null, 'Bets'), e('b', null, formatNumber(state.predictions.length))),
       e('div', { className: 'stat' }, e('span', null, 'Transactions'), e('b', null, formatNumber(state.walletHistory.length)))
+    ),
+    e('section', { className: 'grid two' },
+      e('div', { className: 'panel' },
+        e('div', { className: 'section-head' }, e('h2', null, 'Profile settings')),
+        e('form', { className: 'form-grid', onSubmit: handleProfileSubmit },
+          e('label', { className: 'full' }, 'Avatar URL',
+            e('input', {
+              type: 'url',
+              placeholder: 'https://example.com/avatar.jpg',
+              value: avatar,
+              onChange: ev => setAvatar(ev.target.value)
+            })
+          ),
+          e('div', { className: 'avatar-preview full' },
+            e(UserAvatar, {
+              user: {
+                username: state.me.username
+              },
+              avatar: avatarPreview
+            }),
+            e('span', null, avatarPreview ? 'Preview from avatar URL' : 'No avatar URL. Initials will be shown.')
+          ),
+          e('button', { className: 'primary-button full', type: 'submit' }, 'Save profile')
+        )
+      ),
+      e('div', { className: 'panel' },
+        e('div', { className: 'section-head' }, e('h2', null, 'Change password')),
+        e('form', { className: 'form-grid', onSubmit: handlePasswordSubmit },
+          e('label', { className: 'full' }, 'Current password',
+            e('input', {
+              type: 'password',
+              autoComplete: 'current-password',
+              required: true,
+              value: currentPassword,
+              onChange: ev => setCurrentPassword(ev.target.value)
+            })
+          ),
+          e('label', null, 'New password',
+            e('input', {
+              type: 'password',
+              minLength: 7,
+              autoComplete: 'new-password',
+              required: true,
+              value: newPassword,
+              onChange: ev => setNewPassword(ev.target.value)
+            })
+          ),
+          e('label', null, 'Confirm new password',
+            e('input', {
+              type: 'password',
+              minLength: 7,
+              autoComplete: 'new-password',
+              required: true,
+              value: confirmPassword,
+              onChange: ev => setConfirmPassword(ev.target.value)
+            })
+          ),
+          e('button', { className: 'secondary-button full', type: 'submit' }, 'Update password')
+        )
+      )
     ),
     e('section', { className: 'grid two' },
       e('div', { className: 'panel' },
