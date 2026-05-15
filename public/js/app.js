@@ -332,33 +332,35 @@ function TopBar() {
   ];
 
   return e('header', { className: 'topbar' },
-    e('a', { className: 'brand', href: '#/home', 'aria-label': 'Worldcup Pick home' },
-      e('img', {
-        src: 'https://media.baoquangninh.vn/upload/image/202604/medium/2497053_a4be41af2811a7673ae166f6edf32016.jpg',
-        className: 'brand-mark',
-        style: { width: '42px', height: '42px', objectFit: 'cover', borderRadius: '8px' }
-      }),
-      e('span', null,
-        e('strong', null, 'Worldcup Pick'),
-        e('small', null, 'Virtual points only')
-      )
-    ),
-    e('nav', { className: 'nav' },
-      navItems.map(([key, label, href]) =>
-        e('a', { key, className: page === key ? 'active' : undefined, href }, label)
-      )
-    ),
-    e('div', { className: 'top-actions' },
-      state.busy ? e('span', { className: 'mini-loader' }) : null,
-      e('span', { className: 'chip live-dot' }, `${formatNumber(liveCount)} live`),
-      state.me ? e('span', { className: 'chip' }, `${formatNumber(state.me.points)} pts`) : null,
-      e('button', { className: 'icon-button', onClick: handleRefresh, title: 'Refresh' }, '\u21bb'),
-      state.me
-        ? e('button', { className: 'ghost-button', onClick: handleLogout }, 'Logout')
-        : e(React.Fragment, null,
-          e('a', { className: 'ghost-button', href: '#/register' }, '\u0110\u0103ng k\u00fd'),
-          e('a', { className: 'primary-link', href: '#/login' }, 'Login')
+    e('div', { className: 'topbar-inner' },
+      e('a', { className: 'brand', href: '#/home', 'aria-label': 'Worldcup Pick home' },
+        e('img', {
+          src: 'https://media.baoquangninh.vn/upload/image/202604/medium/2497053_a4be41af2811a7673ae166f6edf32016.jpg',
+          className: 'brand-mark',
+          style: { width: '42px', height: '42px', objectFit: 'cover', borderRadius: '8px' }
+        }),
+        e('span', null,
+          e('strong', null, 'Worldcup Pick'),
+          e('small', null, 'Virtual points only')
         )
+      ),
+      e('nav', { className: 'nav' },
+        navItems.map(([key, label, href]) =>
+          e('a', { key, className: page === key ? 'active' : undefined, href }, label)
+        )
+      ),
+      e('div', { className: 'top-actions' },
+        state.busy ? e('span', { className: 'mini-loader' }) : null,
+        e('span', { className: 'chip live-dot' }, `${formatNumber(liveCount)} live`),
+        state.me ? e('span', { className: 'chip' }, `${formatNumber(state.me.points)} pts`) : null,
+        e('button', { className: 'icon-button', onClick: handleRefresh, title: 'Refresh' }, '\u21bb'),
+        state.me
+          ? e('button', { className: 'ghost-button', onClick: handleLogout }, 'Logout')
+          : e(React.Fragment, null,
+            e('a', { className: 'ghost-button', href: '#/register' }, '\u0110\u0103ng k\u00fd'),
+            e('a', { className: 'primary-link', href: '#/login' }, 'Login')
+          )
+      )
     )
   );
 }
@@ -913,10 +915,20 @@ function BetSlipUI() {
     picksByMatch[p.matchId].push(p);
   });
 
+  const getSgpMultiplier = (n) => {
+    if (n <= 1) return 1.0;
+    if (n === 2) return 0.85;
+    if (n === 3) return 0.67;
+    if (n === 4) return 0.42;
+    if (n === 5) return 0.25;
+    if (n === 6) return 0.15;
+    return Math.pow(0.6, n - 1);
+  };
+
   Object.values(picksByMatch).forEach(group => {
     let groupOdds = 1.0;
     group.forEach(p => { groupOdds *= Number(p.option.odds || 1); });
-    groupOdds *= Math.pow(0.5, group.length - 1);
+    groupOdds *= getSgpMultiplier(group.length);
     combinedOdds *= groupOdds;
   });
 
@@ -945,7 +957,9 @@ function BetSlipUI() {
       // Single bets
       await runTask(async () => {
         for (const p of state.betSlip) {
-          const stake = Math.max(1, Number(state.betSlipStakes[p.matchId] || 100));
+          const pickKey = `${p.matchId}_${p.marketKey}_${p.optionKey}`;
+          const rawStake = state.betSlipStakes[pickKey];
+          const stake = Math.max(1, Number(rawStake !== undefined ? rawStake : 100));
           await api('/api/predictions', {
             method: 'POST',
             body: {
@@ -965,13 +979,13 @@ function BetSlipUI() {
     }
   };
 
-  const handleStakeChange = (matchId, val) => {
-    state.betSlipStakes[matchId] = Math.max(1, Number(val) || 1);
+  const handleStakeChange = (pickKey, val) => {
+    state.betSlipStakes[pickKey] = val;
     notify();
   };
 
   const handleParlayStakeChange = (val) => {
-    state.parlayStake = Math.max(1, Number(val) || 1);
+    state.parlayStake = val;
     notify();
   };
 
@@ -991,9 +1005,11 @@ function BetSlipUI() {
       ) : null,
       e('div', { className: 'bet-slip-body' },
         state.betSlip.map((p, idx) => {
-          const stake = Math.max(1, Number(state.betSlipStakes[p.matchId] || 100));
-          const returnAmt = Math.round(stake * Number(p.option.odds || 1));
-          return e('div', { key: p.matchId, className: 'bet-slip-item' },
+          const pickKey = `${p.matchId}_${p.marketKey}_${p.optionKey}`;
+          const rawStake = state.betSlipStakes[pickKey] !== undefined ? state.betSlipStakes[pickKey] : 100;
+          const stakeNum = Math.max(1, Number(rawStake) || 0);
+          const returnAmt = Math.round(stakeNum * Number(p.option.odds || 1));
+          return e('div', { key: pickKey, className: 'bet-slip-item' },
             e('button', { className: 'bet-slip-item-remove', onClick: () => removePick(idx) }, '×'),
             e('div', { className: 'bet-slip-match' }, `${p.matchHome} vs ${p.matchAway}`),
             e('div', { className: 'bet-slip-market' }, p.market.title),
@@ -1003,7 +1019,7 @@ function BetSlipUI() {
               e('span', { className: 'bet-slip-odds' }, oddsValue(p.option.odds))
             ),
             state.betSlipType === 'single' ? e('div', { className: 'bet-slip-input', style: { marginTop: '8px' } },
-              e('input', { type: 'number', min: 1, value: stake, onChange: ev => handleStakeChange(p.matchId, ev.target.value) }),
+              e('input', { type: 'number', min: 1, placeholder: 'Nhập điểm...', value: rawStake, onChange: ev => handleStakeChange(pickKey, ev.target.value) }),
               e('div', { className: 'bet-slip-payout' },
                 'Trả về: ', e('strong', null, formatNumber(returnAmt))
               )
@@ -1018,9 +1034,9 @@ function BetSlipUI() {
             e('span', { className: 'bet-slip-total-odds' }, oddsValue(combinedOdds))
           ),
           e('div', { className: 'bet-slip-input' },
-            e('input', { type: 'number', min: 1, value: state.parlayStake, onChange: ev => handleParlayStakeChange(ev.target.value) }),
+            e('input', { type: 'number', min: 1, placeholder: 'Nhập điểm...', value: state.parlayStake !== undefined ? state.parlayStake : 100, onChange: ev => handleParlayStakeChange(ev.target.value) }),
             e('div', { className: 'bet-slip-payout' },
-              'Trả về: ', e('strong', null, formatNumber(Math.round(state.parlayStake * combinedOdds)))
+              'Trả về: ', e('strong', null, formatNumber(Math.round(Math.max(1, Number(state.parlayStake !== undefined ? state.parlayStake : 100) || 0) * combinedOdds)))
             )
           )
         ) : null,

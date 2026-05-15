@@ -1061,11 +1061,21 @@ async function handleApi(req, res, urlObj) {
         });
       }
 
+      const getSgpMultiplier = (n) => {
+        if (n <= 1) return 1.0;
+        if (n === 2) return 0.85;
+        if (n === 3) return 0.67;
+        if (n === 4) return 0.42;
+        if (n === 5) return 0.25;
+        if (n === 6) return 0.15;
+        return Math.pow(0.6, n - 1);
+      };
+
       let combinedOdds = 1.0;
       Object.values(picksByMatch).forEach(group => {
         let groupOdds = 1.0;
         group.forEach(g => { groupOdds *= Number(g.pick.option.odds || 1); });
-        groupOdds *= Math.pow(0.5, group.length - 1);
+        groupOdds *= getSgpMultiplier(group.length);
         combinedOdds *= groupOdds;
       });
 
