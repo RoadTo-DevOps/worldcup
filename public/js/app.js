@@ -256,7 +256,7 @@ function openStream() {
   stream.addEventListener('wallet.updated', refreshFromStream);
   stream.addEventListener('chat.message', refreshFromStream);
   stream.addEventListener('chat.deleted', refreshFromStream);
-  stream.onerror = () => {};
+  stream.onerror = () => { };
   state.stream = stream;
 }
 
@@ -333,7 +333,11 @@ function TopBar() {
 
   return e('header', { className: 'topbar' },
     e('a', { className: 'brand', href: '#/home', 'aria-label': 'Worldcup Pick home' },
-      e('span', { className: 'brand-mark' }, 'WP'),
+      e('img', {
+        src: 'https://media.baoquangninh.vn/upload/image/202604/medium/2497053_a4be41af2811a7673ae166f6edf32016.jpg',
+        className: 'brand-mark',
+        style: { width: '42px', height: '42px', objectFit: 'cover', borderRadius: '8px' }
+      }),
       e('span', null,
         e('strong', null, 'Worldcup Pick'),
         e('small', null, 'Virtual points only')
@@ -352,9 +356,9 @@ function TopBar() {
       state.me
         ? e('button', { className: 'ghost-button', onClick: handleLogout }, 'Logout')
         : e(React.Fragment, null,
-            e('a', { className: 'ghost-button', href: '#/register' }, '\u0110\u0103ng k\u00fd'),
-            e('a', { className: 'primary-link', href: '#/login' }, 'Login')
-          )
+          e('a', { className: 'ghost-button', href: '#/register' }, '\u0110\u0103ng k\u00fd'),
+          e('a', { className: 'primary-link', href: '#/login' }, 'Login')
+        )
     )
   );
 }
@@ -508,10 +512,10 @@ function LeagueMatchSections({
             e('span', null, `${formatNumber(group.matches.length)} matches`),
             !forceShowAll && group.matches.length > previewCount
               ? e('button', {
-                  type: 'button',
-                  className: 'ghost-button league-toggle',
-                  onClick: () => onToggleExpand(expanded ? '' : key)
-                }, expanded ? 'Thu gọn' : 'Xem tất cả')
+                type: 'button',
+                className: 'ghost-button league-toggle',
+                onClick: () => onToggleExpand(expanded ? '' : key)
+              }, expanded ? 'Thu gọn' : 'Xem tất cả')
               : null
           )
         ),
@@ -749,7 +753,7 @@ function MarketBoard({ match }) {
         // Replace it (e.g., switching from 1X2 DraftKings to 1X2 Bet365)
         state.betSlip.splice(existingTypeIdx, 1);
       }
-      
+
       state.betSlip.push({
         matchId: match.id,
         matchHome: match.homeTeam,
@@ -853,31 +857,31 @@ function ChatBox({ match }) {
     e('div', { className: 'chat-list' },
       state.chat.length
         ? state.chat.map(msg => {
-            const timeStr = msg.createdAt ? new Date(msg.createdAt).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
-            return e('div', { key: msg.id, className: 'chat-message' },
-              e(UserAvatar, { user: { username: msg.user?.username || 'User' }, avatar: msg.user?.avatar || '' }),
-              e('div', { style: { width: '100%' } },
-                e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' } },
-                  e('b', null, msg.user?.username || 'User'),
-                  e('span', { style: { fontSize: '12px', color: 'var(--muted)' } }, timeStr)
-                ),
-                e('p', { style: { margin: 0 } }, msg.message)
-              )
-            );
-          })
+          const timeStr = msg.createdAt ? new Date(msg.createdAt).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
+          return e('div', { key: msg.id, className: 'chat-message' },
+            e(UserAvatar, { user: { username: msg.user?.username || 'User' }, avatar: msg.user?.avatar || '' }),
+            e('div', { style: { width: '100%' } },
+              e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' } },
+                e('b', null, msg.user?.username || 'User'),
+                e('span', { style: { fontSize: '12px', color: 'var(--muted)' } }, timeStr)
+              ),
+              e('p', { style: { margin: 0 } }, msg.message)
+            )
+          );
+        })
         : e('div', { className: 'empty' }, 'No messages yet.')
     ),
     state.me
       ? e('form', { className: 'chat-form', onSubmit: handleSubmit },
-          e('input', {
-            value: message,
-            maxLength: 280,
-            placeholder: 'Type message',
-            required: true,
-            onChange: ev => setMessage(ev.target.value)
-          }),
-          e('button', { className: 'secondary-button', type: 'submit' }, 'Send')
-        )
+        e('input', {
+          value: message,
+          maxLength: 280,
+          placeholder: 'Type message',
+          required: true,
+          onChange: ev => setMessage(ev.target.value)
+        }),
+        e('button', { className: 'secondary-button', type: 'submit' }, 'Send')
+      )
       : e('div', { className: 'empty' }, 'Login to chat.')
   );
 }
@@ -912,13 +916,13 @@ function BetSlipUI() {
   Object.values(picksByMatch).forEach(group => {
     let groupOdds = 1.0;
     group.forEach(p => { groupOdds *= Number(p.option.odds || 1); });
-    groupOdds *= Math.pow(0.85, group.length - 1);
+    groupOdds *= Math.pow(0.5, group.length - 1);
     combinedOdds *= groupOdds;
   });
 
   const handlePlaceBet = async () => {
     if (!state.me) return setToast('Vui lòng đăng nhập', 'bad');
-    
+
     if (state.betSlipType === 'parlay') {
       const stake = Math.max(1, Number(state.parlayStake || 100));
       if (stake > walletPoints) return setToast('Không đủ điểm', 'bad');
@@ -1177,17 +1181,16 @@ function PredictionsHistory() {
       return e('div', { key: i, className: `history-row pred-${pred.status}` },
         e('div', null,
           e('b', null, pred.match ? `${pred.match.homeTeam} vs ${pred.match.awayTeam}` : `Match #${pred.matchId}`),
-          e('div', { className: 'history-meta' },
-            e('span', { className: `score-result score-${result.tone}` }, result.score),
-            e('span', { className: `match-state match-state-${result.tone}` }, result.state),
-            e('span', null,
-              `${pred.market?.title || 'K\u00e8o c\u0169'} | ${pred.market?.label || `${pred.predictedHomeScore}-${pred.predictedAwayScore}`} | ${oddsValue(pred.market?.odds)}`
+          e('div', { className: 'history-meta', style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '4px' } },
+            e('span', { className: `score-pill ${result.tone === 'live' ? 'score-live' : ''}` }, result.score),
+            e('span', { style: { fontSize: '13px', color: 'var(--muted)' } },
+              `${pred.market?.title || 'Kèo cũ'} | ${pred.market?.label || `${pred.predictedHomeScore}-${pred.predictedAwayScore}`} | ${oddsValue(pred.market?.odds)}`
             )
           )
         ),
-        e('div', { className: 'pred-actions' },
-          e('span', { className: `status-badge status-${pred.status}` }, pred.status.toUpperCase()),
-          e('strong', { className: betStatusTone(pred.status) },
+        e('div', { className: 'pred-actions', style: { textAlign: 'right' } },
+          e('div', { className: `outcome-badge outcome-${pred.status}` }, pred.status),
+          e('div', { style: { marginTop: '4px', fontWeight: 'bold', fontSize: '15px' }, className: betStatusTone(pred.status) },
             `${formatNumber(pred.rewardPoints)} pts`
           )
         )
@@ -1204,11 +1207,11 @@ function ParlaysHistory() {
         e('div', { className: 'parlay-header' },
           e('div', null,
             e('b', null, `Cược Xiên (${parlay.selections.length} trận)`),
-            e('span', { style: { marginLeft: '8px', color: 'var(--muted)' } }, `Tổng tỷ lệ: ${oddsValue(parlay.combinedOdds)}`)
+            e('div', { style: { fontSize: '13px', color: 'var(--muted)', marginTop: '2px' } }, `Tổng tỷ lệ: ${oddsValue(parlay.combinedOdds)}`)
           ),
-          e('div', { className: 'pred-actions' },
-            e('span', { className: `status-badge status-${parlay.status}` }, parlay.status.toUpperCase()),
-            e('strong', { className: betStatusTone(parlay.status) },
+          e('div', { className: 'pred-actions', style: { textAlign: 'right' } },
+            e('div', { className: `outcome-badge outcome-${parlay.status}` }, parlay.status),
+            e('div', { style: { marginTop: '4px', fontWeight: 'bold', fontSize: '15px' }, className: betStatusTone(parlay.status) },
               `${formatNumber(parlay.rewardPoints)} pts`
             )
           )
@@ -1348,38 +1351,38 @@ function AdminPage() {
       e('div', { className: 'section-head' }, e('h2', null, 'Recent transactions')),
       state.admin.transactions.length
         ? e('div', { className: 'stack-list' },
-            state.admin.transactions.slice(0, 20).map((tx, i) =>
-              e('div', { key: i, className: 'history-row' },
-                e('div', null, e('b', null, `User #${tx.userId} - ${tx.type}`), e('span', null, tx.note)),
-                e('strong', { className: Number(tx.amount) >= 0 ? 'good' : 'bad' },
-                  `${Number(tx.amount) >= 0 ? '+' : ''}${formatNumber(tx.amount)}`
-                )
+          state.admin.transactions.slice(0, 20).map((tx, i) =>
+            e('div', { key: i, className: 'history-row' },
+              e('div', null, e('b', null, `User #${tx.userId} - ${tx.type}`), e('span', null, tx.note)),
+              e('strong', { className: Number(tx.amount) >= 0 ? 'good' : 'bad' },
+                `${Number(tx.amount) >= 0 ? '+' : ''}${formatNumber(tx.amount)}`
               )
             )
           )
+        )
         : e('div', { className: 'empty' }, 'No transactions.')
     ),
     e('section', { className: 'panel' },
       e('div', { className: 'section-head' }, e('h2', null, 'Pending bets'), e('span', null, formatNumber(state.admin.predictions.length))),
       state.admin.predictions.length
         ? e('div', { className: 'stack-list' },
-            state.admin.predictions.map((pred, i) =>
-              e('div', { key: i, className: 'history-row' },
-                e('div', null,
-                  e('b', null, `${pred.user?.username || `User #${pred.userId}`} - ${pred.market?.title || 'Bet'}`),
-                  e('span', null,
-                    `${pred.match ? `${pred.match.homeTeam} vs ${pred.match.awayTeam}` : `Match #${pred.matchId}`} | ${pred.market?.label || ''} | ${oddsValue(pred.market?.odds)} | ${pred.status}`
-                  )
-                ),
-                e('strong', null, `${formatNumber(pred.rewardPoints)} pts`),
-                e('div', { className: 'actions' },
-                  e('button', { className: 'ghost-button', onClick: () => handleSettle(pred.id, 'won') }, 'Won'),
-                  e('button', { className: 'ghost-button', onClick: () => handleSettle(pred.id, 'lost') }, 'Lost'),
-                  e('button', { className: 'ghost-button', onClick: () => handleSettle(pred.id, 'push') }, 'Push')
+          state.admin.predictions.map((pred, i) =>
+            e('div', { key: i, className: 'history-row' },
+              e('div', null,
+                e('b', null, `${pred.user?.username || `User #${pred.userId}`} - ${pred.market?.title || 'Bet'}`),
+                e('span', null,
+                  `${pred.match ? `${pred.match.homeTeam} vs ${pred.match.awayTeam}` : `Match #${pred.matchId}`} | ${pred.market?.label || ''} | ${oddsValue(pred.market?.odds)} | ${pred.status}`
                 )
+              ),
+              e('strong', null, `${formatNumber(pred.rewardPoints)} pts`),
+              e('div', { className: 'actions' },
+                e('button', { className: 'ghost-button', onClick: () => handleSettle(pred.id, 'won') }, 'Won'),
+                e('button', { className: 'ghost-button', onClick: () => handleSettle(pred.id, 'lost') }, 'Lost'),
+                e('button', { className: 'ghost-button', onClick: () => handleSettle(pred.id, 'push') }, 'Push')
               )
             )
           )
+        )
         : e('div', { className: 'empty' }, 'No pending bets.')
     )
   );
@@ -1546,12 +1549,12 @@ function NotificationsSection() {
     ),
     state.notifications.length
       ? e('div', { className: 'stack-list' },
-          state.notifications.slice(0, 8).map((item, i) =>
-            e('div', { key: i, className: 'history-row' },
-              e('div', null, e('b', null, item.title), e('span', null, item.message))
-            )
+        state.notifications.slice(0, 8).map((item, i) =>
+          e('div', { key: i, className: 'history-row' },
+            e('div', null, e('b', null, item.title), e('span', null, item.message))
           )
         )
+      )
       : e('div', { className: 'empty' }, 'No notifications.')
   );
 }

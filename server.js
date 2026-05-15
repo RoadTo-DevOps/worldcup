@@ -630,7 +630,7 @@ function settleParlays(match, settings) {
           Object.values(wonByMatch).forEach(group => {
             let groupMul = 1.0;
             group.forEach(s => { groupMul *= Number(s.multiplier || 1); });
-            groupMul *= Math.pow(0.85, group.length - 1);
+            groupMul *= Math.pow(0.5, group.length - 1);
             finalMultiplier *= groupMul;
           });
           parlay.rewardPoints = Math.round(Number(parlay.betPoints) * finalMultiplier);
@@ -1065,7 +1065,7 @@ async function handleApi(req, res, urlObj) {
       Object.values(picksByMatch).forEach(group => {
         let groupOdds = 1.0;
         group.forEach(g => { groupOdds *= Number(g.pick.option.odds || 1); });
-        groupOdds *= Math.pow(0.85, group.length - 1);
+        groupOdds *= Math.pow(0.5, group.length - 1);
         combinedOdds *= groupOdds;
       });
 
