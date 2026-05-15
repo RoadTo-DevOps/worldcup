@@ -799,10 +799,10 @@ function MarketBoard({ match }) {
 
 function MarketSection({ section, open, matchId, onPickChange }) {
   return e('details', { className: 'market-group', open },
-    e('summary', null,
+    e('summary', { className: 'market-group-header' },
       e('div', null,
         e('b', null, section.label),
-        e('span', null, `${formatNumber(section.markets.length)} k\u00e8o \u00b7 ${formatNumber(section.providers.length)} nh\u00e0 cung c\u1ea5p`)
+        e('span', null, `${formatNumber(section.markets.length)} k\u00e8o`)
       )
     ),
     e('div', { className: 'market-group-body' },
@@ -816,7 +816,7 @@ function MarketSection({ section, open, matchId, onPickChange }) {
 function MarketItem({ matchId, market, onPickChange }) {
   if (market.disabled) return null;
   return e('div', { className: 'market-item' },
-    e('div', { className: 'market-title' },
+    e('div', { className: 'market-item-header' },
       e('b', null, market.title),
       e('span', null, market.provider || 'ESPN')
     ),
@@ -1529,7 +1529,7 @@ function RegisterPage() {
           e('label', null, 'Avatar URL (t\u00f9y ch\u1ecdn)',
             e('input', { type: 'url', value: avatar, onChange: ev => setAvatar(ev.target.value) })
           ),
-          e('button', { className: 'primary-button', type: 'submit' }, 'T\u1ea1o t\u00e0i kho\u1ea3n')
+          e('button', { className: 'primary-button auth-btn', type: 'submit' }, 'T\u1ea1o t\u00e0i kho\u1ea3n')
         ),
         e('p', { className: 'auth-switch' },
           '\u0110\u00e3 c\u00f3 t\u00e0i kho\u1ea3n? ',

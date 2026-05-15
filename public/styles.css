@@ -438,8 +438,9 @@ input:focus, select:focus {
 /* ─── Badges & Chips ─────────────────────────────────────────────────────── */
 .badge {
   position: absolute;
-  top: -10px;
-  right: 20px;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
   padding: 4px 12px;
   border-radius: var(--radius-full);
   font-size: 11px;
@@ -695,7 +696,7 @@ input:focus, select:focus {
 /* ─── Market Board & Options ─────────────────────────────────────────────── */
 .market-board {
   display: grid;
-  gap: 16px;
+  gap: 32px;
 }
 
 .market-group {
@@ -705,13 +706,34 @@ input:focus, select:focus {
   overflow: hidden;
 }
 
-.market-title {
-  padding: 12px 16px;
-  background: rgba(255, 255, 255, 0.02);
+.market-group-header {
+  padding: 16px 20px;
+  background: rgba(255, 255, 255, 0.03);
   border-bottom: 1px solid var(--line);
-  font-weight: 600;
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.market-item {
+  border-bottom: 1px solid var(--line);
+  padding: 12px 0;
+}
+
+.market-item:last-child {
+  border-bottom: none;
+}
+
+.market-item-header {
+  padding: 8px 20px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 14px;
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .market-options {
@@ -742,19 +764,28 @@ input:focus, select:focus {
   box-shadow: inset 0 0 0 2px var(--green);
 }
 
+.market-option.selected strong {
+  color: #fff;
+}
+
 .market-option b {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--muted);
+  font-weight: 500;
 }
 
 .market-option strong {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--text);
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--green);
+  background: rgba(16, 185, 129, 0.1);
+  padding: 4px 8px;
+  border-radius: 6px;
 }
 
 .market-option.selected strong {
-  color: var(--green);
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
 }
 
 /* ─── Utilities & Empty States ───────────────────────────────────────────── */
@@ -1254,9 +1285,33 @@ tr:hover td {
 }
 
 .outcome-pending {
-  background: var(--panel-2);
-  color: var(--muted);
-  border: 1px solid var(--line);
+  background: #fef08a;
+  color: #854d0e;
+  border: 1px solid #facc15;
+}
+
+/* Auth fixes */
+.form-grid .check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 14px;
+  color: var(--text);
+  margin: 8px 0;
+}
+
+.form-grid .check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.auth-btn {
+  margin: 12px auto 0;
+  min-width: 200px;
 }
 
 .history-row {
