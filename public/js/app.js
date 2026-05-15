@@ -25,12 +25,18 @@ const state = {
   matches: [],
   leaderboard: [],
   predictions: [],
+  parlays: [],
   walletHistory: [],
   notifications: [],
   detail: null,
   chat: [],
   admin: null,
   betDrafts: {},
+  betSlip: [],
+  betSlipOpen: false,
+  betSlipType: 'single', // 'single' or 'parlay'
+  betSlipStakes: {},
+  parlayStake: 100,
   filters: { league: 'all', status: 'all', date: '', q: '' },
   leaderboardPeriod: 'all-time',
   toast: null,
@@ -205,6 +211,7 @@ async function refreshPrivateData() {
     api('/api/notifications?limit=20')
   ]);
   state.predictions = p.predictions || [];
+  state.parlays = p.parlays || [];
   state.walletHistory = w.history || [];
   state.notifications = n.notifications || [];
 }
@@ -372,7 +379,8 @@ function App() {
     e(TopBar, null),
     e('main', { className: 'app', 'aria-live': 'polite' },
       e(PageComp, null)
-    )
+    ),
+    e(BetSlipUI, null)
   );
 }
 
@@ -691,7 +699,7 @@ function BetSection({ match }) {
     e(PlacedBets, { predictions: placed }),
     match.locked
       ? e('div', { className: 'empty' }, 'C\u1eeda c\u01b0\u1ee3c \u0111\u00e3 \u0111\u00f3ng.')
-      : e(BetForm, { match, key: match.id })
+      : e(MarketBoard, { match, key: match.id })
   );
 }
 
@@ -712,18 +720,9 @@ function PlacedBets({ predictions }) {
   );
 }
 
-// ─── Bet form ─────────────────────────────────────────────────────────────────
-function BetForm({ match }) {
+// ─── Market Board (Replaces old BetForm) ──────────────────────────────────────
+function MarketBoard({ match }) {
   const markets = Array.isArray(match.markets) ? match.markets : [];
-  const walletPoints = Math.max(0, Number(state.me?.walletBalance || state.me?.points || 0));
-  const draft = state.betDrafts[String(match.id)] || {};
-
-  const [selectedPick, setSelectedPick] = React.useState(
-    () => findDraftPick(match.id, markets) || findFirstPick(markets)
-  );
-  const [stake, setStake] = React.useState(
-    () => Math.max(1, Number(draft.stake || 100))
-  );
   const [marketFilter, setMarketFilter] = React.useState('all');
 
   if (!markets.length) {
@@ -733,59 +732,39 @@ function BetForm({ match }) {
   const sections = buildMarketSections(markets);
   const visibleSections = marketFilter === 'all' ? sections : sections.filter(s => s.key === marketFilter);
 
-  const handlePickChange = (marketKey, optionKey, market, option) => {
-    const pick = { marketKey, optionKey, market, option };
-    setSelectedPick(pick);
-    state.betDrafts[String(match.id)] = { ...(state.betDrafts[String(match.id)] || {}), marketKey, optionKey };
-  };
-
-  const handleStakeChange = value => {
-    const next = Math.max(1, Number(value) || 1);
-    setStake(next);
-    state.betDrafts[String(match.id)] = { ...(state.betDrafts[String(match.id)] || {}), stake: next };
-  };
-
-  const handleSubmit = async ev => {
-    ev.preventDefault();
-    if (!selectedPick) return;
-    await runTask(async () => {
-      await api('/api/predictions', {
-        method: 'POST',
-        body: {
-          matchId: match.id,
-          marketKey: selectedPick.marketKey,
-          optionKey: selectedPick.optionKey,
-          betPoints: stake
-        }
-      });
-      delete state.betDrafts[String(match.id)];
-      await refreshPrivateData();
-      await refreshPublicData();
-      await loadRouteData();
-    }, 'Bet saved');
-  };
-
   const filterTabs = [
     { key: 'all', label: 'T\u1ea5t c\u1ea3', count: sections.reduce((t, s) => t + s.markets.length, 0) },
     ...sections.map(s => ({ key: s.key, label: s.label, count: s.markets.length }))
   ];
 
-  return e('form', { className: 'bet-form', onSubmit: handleSubmit },
-    e('div', { className: 'bet-meta' },
-      e('span', { className: 'chip' }, `${formatNumber(walletPoints)} điểm hiện có`),
-      e('span', { className: 'chip' }, `${formatNumber(markets.length)} kèo`),
-      e('span', { className: 'chip' }, 'Điểm ảo')
-    ),
-    e('div', { className: 'bet-preview' },
-      e('div', null,
-        e('b', null, selectedPick?.market?.title || 'Ch\u01b0a ch\u1ecdn k\u00e8o'),
-        e('span', null, selectedPick?.option?.label || 'Ch\u1ecdn field b\u00ean d\u01b0\u1edbi')
-      ),
-      e('div', { className: 'bet-preview-stats' },
-        e('strong', null, oddsValue(selectedPick?.option?.odds)),
-        e('span', null, betProjection(stake, selectedPick?.option?.odds))
-      )
-    ),
+  const handlePickChange = (marketKey, optionKey, market, option) => {
+    // Remove if already selected
+    const existingIdx = state.betSlip.findIndex(p => p.matchId === match.id && p.marketKey === marketKey && p.optionKey === optionKey);
+    if (existingIdx >= 0) {
+      state.betSlip.splice(existingIdx, 1);
+    } else {
+      // Find if there is already a pick for this match with the SAME marketType
+      const existingTypeIdx = state.betSlip.findIndex(p => p.matchId === match.id && p.market.marketType === market.marketType);
+      if (existingTypeIdx >= 0) {
+        // Replace it (e.g., switching from 1X2 DraftKings to 1X2 Bet365)
+        state.betSlip.splice(existingTypeIdx, 1);
+      }
+      
+      state.betSlip.push({
+        matchId: match.id,
+        matchHome: match.homeTeam,
+        matchAway: match.awayTeam,
+        marketKey,
+        optionKey,
+        market,
+        option
+      });
+      state.betSlipOpen = true; // Auto open bet slip
+    }
+    notify();
+  };
+
+  return e('div', { className: 'market-board-container' },
     e('div', { className: 'market-tabs', role: 'tablist' },
       filterTabs.map(f =>
         e('button', {
@@ -806,79 +785,55 @@ function BetForm({ match }) {
           key: section.key,
           section,
           open: idx === 0,
-          selectedPick,
+          matchId: match.id,
           onPickChange: handlePickChange
         })
       )
-    ),
-    e('div', { className: 'stake-row' },
-      e('label', null,
-        '\u0110i\u1ec3m c\u01b0\u1ee3c',
-        e('input', {
-          name: 'betPoints',
-          type: 'number',
-          min: 1,
-          value: stake,
-          onChange: ev => handleStakeChange(ev.target.value)
-        })
-      ),
-      e('div', { className: 'stake-pills' },
-        [25, 50, 100].map(a =>
-          e('button', { key: a, type: 'button', className: 'chip', onClick: () => handleStakeChange(a) }, formatNumber(a))
-        ),
-        e('button', { type: 'button', className: 'chip', onClick: () => handleStakeChange(walletPoints || 1) }, 'All in')
-      ),
-      e('button', { className: 'primary-button', type: 'submit', disabled: !selectedPick }, '\u0110\u1eb7t k\u00e8o')
-    ),
-    e('div', { className: 'market-note' },
-      'x1.76 ngh\u0129a l\u00e0 c\u01b0\u1ee3c 100, nh\u1eadn 176. +340 ho\u1eb7c 5/7 ch\u1ec9 l\u00e0 ki\u1ec3u ghi odds kh\u00e1c, app \u0111\u1ed5i h\u1ebft sang x \u0111\u1ec3 d\u1ec5 \u0111\u1ecdc.'
     )
   );
 }
 
-function MarketSection({ section, open, selectedPick, onPickChange }) {
+function MarketSection({ section, open, matchId, onPickChange }) {
   return e('details', { className: 'market-group', open },
     e('summary', null,
       e('div', null,
         e('b', null, section.label),
         e('span', null, `${formatNumber(section.markets.length)} k\u00e8o \u00b7 ${formatNumber(section.providers.length)} nh\u00e0 cung c\u1ea5p`)
-      ),
-      e('span', { className: 'group-arrow' }, '\u2304')
+      )
     ),
     e('div', { className: 'market-group-body' },
       section.markets.map(market =>
-        e(MarketItem, { key: market.key, market, selectedPick, onPickChange })
+        e(MarketItem, { key: market.key, matchId, market, onPickChange })
       )
     )
   );
 }
 
-function MarketItem({ market, selectedPick, onPickChange }) {
-  if (market.disabled) {
-    return e('div', { className: 'market disabled' },
-      e('div', { className: 'market-title' }, e('b', null, market.title), e('span', null, 'Ch\u01b0a m\u1edf')),
-      e('p', null, market.description)
-    );
-  }
-  return e('div', { className: 'market' },
-    e('div', { className: 'market-title' }, e('b', null, market.title), e('span', null, market.description)),
+function MarketItem({ matchId, market, onPickChange }) {
+  if (market.disabled) return null;
+  return e('div', { className: 'market-item' },
+    e('div', { className: 'market-title' },
+      e('b', null, market.title),
+      e('span', null, market.provider || 'ESPN')
+    ),
     e('div', { className: 'market-options' },
-      market.options.map(option =>
-        e('label', { key: option.key, className: 'market-option' },
-          e('input', {
-            type: 'radio',
-            name: 'pick',
-            value: `${market.key}|${option.key}`,
-            checked: selectedPick?.marketKey === market.key && selectedPick?.optionKey === option.key,
-            onChange: () => onPickChange(market.key, option.key, market, option)
-          }),
-          e('span', null, option.label),
-          e('b', null, oddsValue(option.odds))
-        )
-      )
+      market.options.map(option => {
+        const isSelected = state.betSlip.some(p => p.matchId === matchId && p.marketKey === market.key && p.optionKey === option.key);
+        return e('button', {
+          key: option.key,
+          type: 'button',
+          className: `market-option${isSelected ? ' selected' : ''}`,
+          onClick: () => onPickChange(market.key, option.key, market, option)
+        },
+          e('b', null, option.label),
+          e('strong', null, oddsValue(option.odds))
+        );
+      })
     )
   );
 }
+
+
 
 // ─── Chat box ─────────────────────────────────────────────────────────────────
 function ChatBox({ match }) {
@@ -897,15 +852,19 @@ function ChatBox({ match }) {
   return e(React.Fragment, null,
     e('div', { className: 'chat-list' },
       state.chat.length
-        ? state.chat.map(msg =>
-            e('div', { key: msg.id, className: 'chat-message' },
+        ? state.chat.map(msg => {
+            const timeStr = msg.createdAt ? new Date(msg.createdAt).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
+            return e('div', { key: msg.id, className: 'chat-message' },
               e(UserAvatar, { user: { username: msg.user?.username || 'User' }, avatar: msg.user?.avatar || '' }),
-              e('div', null,
-                e('b', null, msg.user?.username || 'User'),
-                e('p', null, msg.message)
+              e('div', { style: { width: '100%' } },
+                e('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' } },
+                  e('b', null, msg.user?.username || 'User'),
+                  e('span', { style: { fontSize: '12px', color: 'var(--muted)' } }, timeStr)
+                ),
+                e('p', { style: { margin: 0 } }, msg.message)
               )
-            )
-          )
+            );
+          })
         : e('div', { className: 'empty' }, 'No messages yet.')
     ),
     state.me
@@ -923,12 +882,157 @@ function ChatBox({ match }) {
   );
 }
 
+// ─── Bet Slip UI ──────────────────────────────────────────────────────────────
+function BetSlipUI() {
+  if (state.betSlip.length === 0) {
+    if (state.betSlipOpen) {
+      state.betSlipOpen = false;
+      notify();
+    }
+    return null;
+  }
+
+  const walletPoints = Math.max(0, Number(state.me?.walletBalance || state.me?.points || 0));
+
+  const toggleOpen = () => { state.betSlipOpen = !state.betSlipOpen; notify(); };
+  const removePick = (idx) => { state.betSlip.splice(idx, 1); notify(); };
+
+  const canParlay = state.betSlip.length > 1;
+  if (!canParlay && state.betSlipType === 'parlay') state.betSlipType = 'single';
+
+  const setType = (t) => { state.betSlipType = t; notify(); };
+
+  let combinedOdds = 1.0;
+  const picksByMatch = {};
+  state.betSlip.forEach(p => {
+    if (!picksByMatch[p.matchId]) picksByMatch[p.matchId] = [];
+    picksByMatch[p.matchId].push(p);
+  });
+
+  Object.values(picksByMatch).forEach(group => {
+    let groupOdds = 1.0;
+    group.forEach(p => { groupOdds *= Number(p.option.odds || 1); });
+    groupOdds *= Math.pow(0.85, group.length - 1);
+    combinedOdds *= groupOdds;
+  });
+
+  const handlePlaceBet = async () => {
+    if (!state.me) return setToast('Vui lòng đăng nhập', 'bad');
+    
+    if (state.betSlipType === 'parlay') {
+      const stake = Math.max(1, Number(state.parlayStake || 100));
+      if (stake > walletPoints) return setToast('Không đủ điểm', 'bad');
+
+      await runTask(async () => {
+        await api('/api/parlays', {
+          method: 'POST',
+          body: {
+            betPoints: stake,
+            picks: state.betSlip.map(p => ({ matchId: p.matchId, marketKey: p.marketKey, optionKey: p.optionKey }))
+          }
+        });
+        state.betSlip = [];
+        state.betSlipOpen = false;
+        await refreshPrivateData();
+        await refreshPublicData();
+        if (routeName() === 'match') await loadRouteData();
+      }, 'Đặt Cược Xiên thành công!');
+    } else {
+      // Single bets
+      await runTask(async () => {
+        for (const p of state.betSlip) {
+          const stake = Math.max(1, Number(state.betSlipStakes[p.matchId] || 100));
+          await api('/api/predictions', {
+            method: 'POST',
+            body: {
+              matchId: p.matchId,
+              marketKey: p.marketKey,
+              optionKey: p.optionKey,
+              betPoints: stake
+            }
+          });
+        }
+        state.betSlip = [];
+        state.betSlipOpen = false;
+        await refreshPrivateData();
+        await refreshPublicData();
+        if (routeName() === 'match') await loadRouteData();
+      }, 'Đặt Cược Đơn thành công!');
+    }
+  };
+
+  const handleStakeChange = (matchId, val) => {
+    state.betSlipStakes[matchId] = Math.max(1, Number(val) || 1);
+    notify();
+  };
+
+  const handleParlayStakeChange = (val) => {
+    state.parlayStake = Math.max(1, Number(val) || 1);
+    notify();
+  };
+
+  return e(React.Fragment, null,
+    e('button', { className: 'bet-slip-toggle', onClick: toggleOpen },
+      '🛒',
+      e('span', { className: 'bet-slip-badge' }, state.betSlip.length)
+    ),
+    e('div', { className: `bet-slip-drawer ${state.betSlipOpen ? 'open' : ''}` },
+      e('div', { className: 'bet-slip-header' },
+        e('h3', null, '🛒 Giỏ hàng cược', e('span', { className: 'chip' }, `${formatNumber(walletPoints)} pts`)),
+        e('button', { className: 'bet-slip-close', onClick: toggleOpen }, '×')
+      ),
+      canParlay ? e('div', { className: 'bet-slip-tabs', style: { margin: '16px 16px 0' } },
+        e('button', { className: `bet-slip-tab ${state.betSlipType === 'single' ? 'active' : ''}`, onClick: () => setType('single') }, 'Cược Đơn'),
+        e('button', { className: `bet-slip-tab ${state.betSlipType === 'parlay' ? 'active' : ''}`, onClick: () => setType('parlay') }, 'Cược Xiên')
+      ) : null,
+      e('div', { className: 'bet-slip-body' },
+        state.betSlip.map((p, idx) => {
+          const stake = Math.max(1, Number(state.betSlipStakes[p.matchId] || 100));
+          const returnAmt = Math.round(stake * Number(p.option.odds || 1));
+          return e('div', { key: p.matchId, className: 'bet-slip-item' },
+            e('button', { className: 'bet-slip-item-remove', onClick: () => removePick(idx) }, '×'),
+            e('div', { className: 'bet-slip-match' }, `${p.matchHome} vs ${p.matchAway}`),
+            e('div', { className: 'bet-slip-market' }, p.market.title),
+            e('div', null,
+              e('span', null, p.option.label),
+              ' @ ',
+              e('span', { className: 'bet-slip-odds' }, oddsValue(p.option.odds))
+            ),
+            state.betSlipType === 'single' ? e('div', { className: 'bet-slip-input', style: { marginTop: '8px' } },
+              e('input', { type: 'number', min: 1, value: stake, onChange: ev => handleStakeChange(p.matchId, ev.target.value) }),
+              e('div', { className: 'bet-slip-payout' },
+                'Trả về: ', e('strong', null, formatNumber(returnAmt))
+              )
+            ) : null
+          );
+        })
+      ),
+      e('div', { className: 'bet-slip-footer' },
+        state.betSlipType === 'parlay' ? e(React.Fragment, null,
+          e('div', { className: 'bet-slip-summary' },
+            e('span', null, 'Tỷ lệ xiên (Combined Odds):'),
+            e('span', { className: 'bet-slip-total-odds' }, oddsValue(combinedOdds))
+          ),
+          e('div', { className: 'bet-slip-input' },
+            e('input', { type: 'number', min: 1, value: state.parlayStake, onChange: ev => handleParlayStakeChange(ev.target.value) }),
+            e('div', { className: 'bet-slip-payout' },
+              'Trả về: ', e('strong', null, formatNumber(Math.round(state.parlayStake * combinedOdds)))
+            )
+          )
+        ) : null,
+        e('button', { className: 'primary-button', onClick: handlePlaceBet, style: { width: '100%' } }, 'Xác nhận Đặt cược')
+      )
+    )
+  );
+}
+
 // ─── Profile page ─────────────────────────────────────────────────────────────
 function ProfilePage() {
   const [avatar, setAvatar] = React.useState(state.me?.avatar || '');
   const [currentPassword, setCurrentPassword] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
   const [confirmPassword, setConfirmPassword] = React.useState('');
+  const [historyTab, setHistoryTab] = React.useState('single');
 
   React.useEffect(() => {
     setAvatar(state.me?.avatar || '');
@@ -1050,8 +1154,12 @@ function ProfilePage() {
     ),
     e('section', { className: 'grid two' },
       e('div', { className: 'panel' },
-        e('div', { className: 'section-head' }, e('h2', null, 'Bet history')),
-        e(PredictionsHistory, null)
+        e('div', { className: 'section-head' }, e('h2', null, 'Lịch sử cược')),
+        e('div', { className: 'profile-tabs' },
+          e('button', { className: `profile-tab ${historyTab === 'single' ? 'active' : ''}`, onClick: () => setHistoryTab('single') }, 'Cược Đơn'),
+          e('button', { className: `profile-tab ${historyTab === 'parlay' ? 'active' : ''}`, onClick: () => setHistoryTab('parlay') }, 'Cược Xiên')
+        ),
+        historyTab === 'single' ? e(PredictionsHistory, null) : e(ParlaysHistory, null)
       ),
       e('div', { className: 'panel' },
         e('div', { className: 'section-head' }, e('h2', null, 'Wallet history')),
@@ -1082,6 +1190,44 @@ function PredictionsHistory() {
           e('strong', { className: betStatusTone(pred.status) },
             `${formatNumber(pred.rewardPoints)} pts`
           )
+        )
+      );
+    })
+  );
+}
+
+function ParlaysHistory() {
+  if (!state.parlays.length) return e('div', { className: 'empty' }, 'Chưa có vé cược xiên nào.');
+  return e('div', { className: 'stack-list' },
+    state.parlays.slice(0, 30).map((parlay, i) => {
+      return e('div', { key: i, className: `parlay-card` },
+        e('div', { className: 'parlay-header' },
+          e('div', null,
+            e('b', null, `Cược Xiên (${parlay.selections.length} trận)`),
+            e('span', { style: { marginLeft: '8px', color: 'var(--muted)' } }, `Tổng tỷ lệ: ${oddsValue(parlay.combinedOdds)}`)
+          ),
+          e('div', { className: 'pred-actions' },
+            e('span', { className: `status-badge status-${parlay.status}` }, parlay.status.toUpperCase()),
+            e('strong', { className: betStatusTone(parlay.status) },
+              `${formatNumber(parlay.rewardPoints)} pts`
+            )
+          )
+        ),
+        e('div', { className: 'parlay-legs' },
+          parlay.selections.map((leg, j) => {
+            const match = leg.match;
+            const result = match ? matchResultSummary(match) : { score: '', state: '' };
+            return e('div', { key: j, className: `parlay-leg ${leg.status}` },
+              e('div', null,
+                e('div', { style: { fontSize: '12px', color: 'var(--muted)' } }, match ? `${match.homeTeam} vs ${match.awayTeam}` : `Match #${leg.matchId}`),
+                e('div', { style: { fontSize: '14px', fontWeight: 'bold' } }, leg.market?.title)
+              ),
+              e('div', { style: { textAlign: 'right' } },
+                e('div', { style: { color: 'var(--text)' } }, `${leg.option?.label} @ ${oddsValue(leg.option?.odds)}`),
+                e('div', { style: { fontSize: '12px', color: 'var(--muted)', marginTop: '2px' } }, leg.status.toUpperCase())
+              )
+            );
+          })
         )
       );
     })

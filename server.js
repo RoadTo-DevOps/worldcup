@@ -575,6 +575,93 @@ function settleMatchPredictions(match) {
     }
     settledCount += 1;
   }
+  settledCount += settleParlays(match, settings);
+  return settledCount;
+}
+
+function settleParlays(match, settings) {
+  let settledCount = 0;
+  const pendingParlays = (db.parlays || []).filter(p => p.status === 'pending');
+  
+  for (const parlay of pendingParlays) {
+    const selection = parlay.selections.find(s => String(s.matchId) === String(match.id));
+    if (!selection || selection.status !== 'pending') continue;
+
+    const result = settleBetMarket(match, selection, settings);
+    selection.status = result.status;
+    selection.multiplier = result.multiplier;
+
+    if (selection.status === 'lost') {
+      parlay.status = 'lost';
+      parlay.rewardPoints = 0;
+      parlay.settledAt = new Date().toISOString();
+      parlay.resultSummary = `Lost leg: ${match.homeTeam} vs ${match.awayTeam}`;
+      
+      const user = findUserById(parlay.userId);
+      if (user) {
+        user.stats ||= { predictions: 0, correct: 0, exact: 0 };
+        user.updatedAt = new Date().toISOString();
+      }
+      notifyUser(parlay.userId, 'Parlay lost', `One of your parlay legs lost.`, {
+        type: 'parlay',
+        parlayId: parlay.id
+      });
+      settledCount += 1;
+    } else if (selection.status === 'won' || selection.status === 'push') {
+      const allSettled = parlay.selections.every(s => s.status !== 'pending');
+      if (allSettled) {
+        let finalMultiplier = 1.0;
+        let hasWon = false;
+        const wonByMatch = {};
+        
+        for (const s of parlay.selections) {
+          if (s.status === 'won') {
+            hasWon = true;
+            if (!wonByMatch[s.matchId]) wonByMatch[s.matchId] = [];
+            wonByMatch[s.matchId].push(s);
+          }
+        }
+        
+        if (!hasWon) {
+          parlay.status = 'push';
+          parlay.rewardPoints = Number(parlay.betPoints);
+        } else {
+          parlay.status = 'won';
+          Object.values(wonByMatch).forEach(group => {
+            let groupMul = 1.0;
+            group.forEach(s => { groupMul *= Number(s.multiplier || 1); });
+            groupMul *= Math.pow(0.85, group.length - 1);
+            finalMultiplier *= groupMul;
+          });
+          parlay.rewardPoints = Math.round(Number(parlay.betPoints) * finalMultiplier);
+        }
+        
+        parlay.settledAt = new Date().toISOString();
+        parlay.resultSummary = `Parlay ${parlay.status}: ${parlay.selections.length} folds`;
+        
+        if (parlay.rewardPoints > 0) {
+          addTransaction({
+            userId: parlay.userId,
+            type: parlay.status === 'push' ? 'push' : 'reward',
+            amount: parlay.rewardPoints,
+            note: `Parlay settled for ${parlay.selections.length} folds`,
+            relatedId: parlay.id
+          });
+          const user = findUserById(parlay.userId);
+          if (user) {
+            user.stats ||= { predictions: 0, correct: 0, exact: 0 };
+            if (parlay.status === 'won') user.stats.correct = Number(user.stats.correct || 0) + 1;
+            user.updatedAt = new Date().toISOString();
+          }
+          notifyUser(parlay.userId, `Parlay ${parlay.status}`, `Your parlay paid ${parlay.rewardPoints} points.`, {
+            type: 'parlay',
+            parlayId: parlay.id
+          });
+        }
+        settledCount += 1;
+      }
+    }
+  }
   return settledCount;
 }
 
@@ -917,6 +1004,99 @@ async function handleApi(req, res, urlObj) {
       });
     }
 
+    if (req.method === 'POST' && pathname === '/api/parlays') {
+      const user = requireUser(req, res);
+      if (!user) return;
+      const body = await readBody(req);
+      
+      const betPoints = parsePositiveNumber(body.betPoints);
+      if (!betPoints || betPoints < 1) return fail(res, 400, 'Bet points invalid');
+      if (betPoints > Number(user.walletBalance || 0)) return fail(res, 400, 'Not enough points');
+
+      if (!Array.isArray(body.picks) || body.picks.length < 2) {
+        return fail(res, 400, 'Parlay must have at least 2 picks');
+      }
+
+      const selections = [];
+      const picksByMatch = {};
+
+      for (const pickInput of body.picks) {
+        const match = db.matches.find((item) => String(item.id) === String(pickInput.matchId));
+        if (!match) return fail(res, 404, `Match not found: ${pickInput.matchId}`);
+        if (isMatchLocked(match, db.settings)) return fail(res, 409, `Match locked: ${match.homeTeam} vs ${match.awayTeam}`);
+
+        const marketKey = String(pickInput.marketKey || '').trim();
+        const optionKey = String(pickInput.optionKey || '').trim();
+        const pick = findMarketPick(match, marketKey, optionKey);
+        if (!pick) return fail(res, 400, `Bet market invalid for match ${match.id}`);
+
+        const provider = pick.market.provider || 'ESPN';
+        const marketType = pick.market.marketType;
+        if (!picksByMatch[match.id]) picksByMatch[match.id] = [];
+        const group = picksByMatch[match.id];
+        
+        if (group.some(g => g.pick.market.marketType === marketType)) {
+           return fail(res, 400, `Cannot select multiple options from the same market type in match ${match.id}`);
+        }
+        
+        group.push({ pick, match, provider });
+        
+        selections.push({
+          matchId: match.id,
+          market: {
+            marketKey: pick.market.key,
+            optionKey: pick.option.key,
+            marketType: pick.market.marketType,
+            period: pick.market.period,
+            settlementMode: pick.market.settlementMode,
+            title: pick.market.title,
+            label: pick.option.label,
+            selection: pick.option.selection,
+            odds: Number(pick.option.odds || 1),
+            line: pick.option.line ?? pick.market.line ?? null,
+            lineHome: pick.option.lineHome ?? pick.market.lineHome ?? null,
+            provider
+          },
+          status: 'pending'
+        });
+      }
+
+      let combinedOdds = 1.0;
+      Object.values(picksByMatch).forEach(group => {
+        let groupOdds = 1.0;
+        group.forEach(g => { groupOdds *= Number(g.pick.option.odds || 1); });
+        groupOdds *= Math.pow(0.85, group.length - 1);
+        combinedOdds *= groupOdds;
+      });
+
+      addTransaction({
+        userId: user.id,
+        type: 'bet',
+        amount: -betPoints,
+        note: `Parlay Bet: ${selections.length} folds`
+      });
+
+      const parlay = {
+        id: nextId(db, 'nextParlayId'),
+        userId: user.id,
+        betPoints,
+        selections,
+        combinedOdds,
+        rewardPoints: 0,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        settledAt: null,
+        resultSummary: ''
+      };
+
+      db.parlays.push(parlay);
+      user.stats ||= { predictions: 0, correct: 0, exact: 0 };
+      user.stats.predictions = Number(user.stats.predictions || 0) + 1;
+      maybePersist();
+      broadcast('wallet.updated', { userId: user.id });
+      return ok(res, 'Parlay created', { parlay });
+    }
+
     if (req.method === 'GET' && pathname === '/api/predictions/me') {
       const user = requireUser(req, res);
       if (!user) return;
@@ -927,7 +1107,19 @@ async function handleApi(req, res, urlObj) {
           ...prediction,
           match: db.matches.find((match) => String(match.id) === String(prediction.matchId)) || null
         }));
-      return ok(res, 'My predictions', { predictions });
+      
+      const parlays = (db.parlays || [])
+        .filter((parlay) => String(parlay.userId) === String(user.id))
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .map((parlay) => ({
+          ...parlay,
+          selections: parlay.selections.map(s => ({
+            ...s,
+            match: db.matches.find(m => String(m.id) === String(s.matchId)) || null
+          }))
+        }));
+
+      return ok(res, 'My predictions', { predictions, parlays });
     }
 
     if (req.method === 'GET' && pathname === '/api/wallet') {

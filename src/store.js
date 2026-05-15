@@ -44,6 +44,7 @@ function createDefaultDb() {
       nextUserId: 1,
       nextMatchId: 1,
       nextPredictionId: 1,
+      nextParlayId: 1,
       nextTransactionId: 1,
       nextChatMessageId: 1,
       nextNotificationId: 2
@@ -52,6 +53,7 @@ function createDefaultDb() {
     users: [],
     matches: [],
     predictions: [],
+    parlays: [],
     walletTransactions: [],
     leaderboardHistory: [],
     chatMessages: [],
@@ -180,6 +182,7 @@ function ensureSeedValues(db) {
   db.users ||= [];
   db.matches ||= [];
   db.predictions ||= [];
+  db.parlays ||= [];
   db.walletTransactions ||= [];
   db.leaderboardHistory ||= [];
   db.chatMessages ||= [];
@@ -187,6 +190,7 @@ function ensureSeedValues(db) {
   db.meta.nextUserId = Math.max(Number(db.meta.nextUserId || 1), maxId(db.users) + 1);
   db.meta.nextMatchId = Math.max(Number(db.meta.nextMatchId || 1), maxId(db.matches) + 1);
   db.meta.nextPredictionId = Math.max(Number(db.meta.nextPredictionId || 1), maxId(db.predictions) + 1);
+  db.meta.nextParlayId = Math.max(Number(db.meta.nextParlayId || 1), maxId(db.parlays) + 1);
   db.meta.nextTransactionId = Math.max(Number(db.meta.nextTransactionId || 1), maxId(db.walletTransactions) + 1);
   db.meta.nextChatMessageId = Math.max(Number(db.meta.nextChatMessageId || 1), maxId(db.chatMessages) + 1);
   db.meta.nextNotificationId = Math.max(Number(db.meta.nextNotificationId || 1), maxId(db.notifications) + 1);
@@ -201,6 +205,7 @@ function pruneDb(db) {
   if (!db) return db;
   db.matches = pruneMatches(db.matches);
   db.predictions = prunePredictions(db.predictions);
+  db.parlays = prunePredictions(db.parlays);
   db.walletTransactions = pruneTimedList(db.walletTransactions, retention.walletDays, retention.maxWalletTransactions);
   db.chatMessages = pruneTimedList(db.chatMessages, retention.chatDays, retention.maxChatMessages);
   db.notifications = pruneTimedList(db.notifications, retention.notificationDays, retention.maxNotifications);

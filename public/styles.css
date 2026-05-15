@@ -872,3 +872,277 @@ tr:hover td {
   gap: 12px;
   font-weight: 600;
 }
+
+/* ─── Floating Bet Slip ──────────────────────────────────────────────────── */
+.bet-slip-toggle {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: linear-gradient(135deg, var(--green), #059669);
+  color: #fff;
+  border-radius: 50%;
+  width: 60px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 25px rgba(16, 185, 129, 0.4);
+  z-index: 100;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  transition: transform var(--transition-smooth);
+}
+
+.bet-slip-toggle:hover {
+  transform: scale(1.05);
+}
+
+.bet-slip-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: var(--red);
+  color: #fff;
+  font-size: 12px;
+  font-weight: bold;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+}
+
+.bet-slip-drawer {
+  position: fixed;
+  bottom: 90px;
+  right: 24px;
+  width: 360px;
+  background: rgba(15, 20, 25, 0.95);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: translateY(20px);
+  opacity: 0;
+  pointer-events: none;
+  transition: all var(--transition-smooth);
+}
+
+.bet-slip-drawer.open {
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.bet-slip-header {
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.5);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.bet-slip-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bet-slip-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 20px;
+}
+
+.bet-slip-close:hover {
+  color: var(--text);
+}
+
+.bet-slip-body {
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bet-slip-item {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line-light);
+  border-radius: 12px;
+  padding: 12px;
+  position: relative;
+}
+
+.bet-slip-item-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.bet-slip-item-remove:hover {
+  color: var(--red);
+}
+
+.bet-slip-match {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.bet-slip-market {
+  font-size: 14px;
+  font-weight: bold;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.bet-slip-odds {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--green);
+}
+
+.bet-slip-footer {
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.5);
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bet-slip-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.bet-slip-total-odds {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--green);
+}
+
+.bet-slip-tabs {
+  display: flex;
+  gap: 8px;
+  background: rgba(0,0,0,0.3);
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.bet-slip-tab {
+  flex: 1;
+  padding: 8px;
+  text-align: center;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: bold;
+  border: none;
+  background: transparent;
+}
+
+.bet-slip-tab.active {
+  background: var(--panel-2);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.bet-slip-input {
+  display: flex;
+  gap: 8px;
+}
+
+.bet-slip-input input {
+  flex: 1;
+}
+
+.bet-slip-payout {
+  text-align: right;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.bet-slip-payout strong {
+  color: var(--green);
+  font-size: 16px;
+}
+
+/* History Tabs in Profile */
+.profile-tabs {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.profile-tab {
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.profile-tab.active {
+  color: var(--green);
+  border-bottom-color: var(--green);
+}
+
+.parlay-card {
+  background: rgba(20, 25, 30, 0.5);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.parlay-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line-light);
+}
+
+.parlay-legs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.parlay-leg {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 8px;
+  border-left: 3px solid var(--muted);
+}
+
+.parlay-leg.won { border-left-color: var(--green); }
+.parlay-leg.lost { border-left-color: var(--red); }
+.parlay-leg.push { border-left-color: var(--blue); }
+
