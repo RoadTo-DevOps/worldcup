@@ -1354,3 +1354,107 @@ tr:hover td {
 .parlay-leg:last-child {
   border-bottom: none;
 }
+
+/* ??? Mobile Responsiveness ???????????????????????????????????????????????? */
+@media (max-width: 768px) {
+  /* Topbar */
+  .topbar {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    padding: 16px;
+  }
+  .brand { justify-content: center; }
+  .nav { justify-content: center; flex-wrap: wrap; }
+  .top-actions { justify-content: center; flex-wrap: wrap; }
+  
+  /* App container */
+  .app {
+    width: 100%;
+    padding: 24px 16px 80px;
+  }
+  
+  /* Hero & Page Head */
+  .hero, .match-hero, .page-head {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 32px 16px;
+    gap: 20px;
+  }
+  .hero h1, .page-head h1, .match-hero h1 {
+    font-size: clamp(28px, 6vw, 40px);
+  }
+  .hero-stats {
+    flex-direction: column;
+    width: 100%;
+  }
+  
+  /* Toolbar (Filters) */
+  .toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+  .toolbar input[type="search"], .toolbar button {
+    grid-column: 1 / -1;
+  }
+  
+  /* Big Score */
+  .big-score {
+    gap: 16px;
+    font-size: clamp(40px, 10vw, 64px);
+  }
+  
+  /* Teams in Match Card */
+  .teams {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .team {
+    justify-content: center;
+    flex-direction: column;
+    text-align: center;
+    gap: 8px;
+  }
+  .team:last-child {
+    justify-content: center;
+    text-align: center;
+  }
+  .score {
+    margin: 4px auto;
+    width: fit-content;
+  }
+  
+  /* Market Board */
+  .market-group-header, .market-item-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .market-options {
+    grid-template-columns: 1fr 1fr;
+  }
+  
+  /* Bet Slip Drawer */
+  .bet-slip-drawer {
+    width: auto;
+    left: 16px;
+    right: 16px;
+    bottom: 90px;
+  }
+  
+  /* Auth Panels */
+  .auth-solo {
+    padding: 20px 16px;
+  }
+  .auth-panel {
+    padding: 24px 16px;
+  }
+  
+  /* Tables */
+  .table-wrap {
+    margin: 0 -24px;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+}
+
