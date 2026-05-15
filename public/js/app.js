@@ -205,11 +205,15 @@ async function refreshPublicDataQuiet() {
 
 async function refreshPrivateData() {
   if (!state.me) return;
-  const [p, w, n] = await Promise.all([
+  const [meResp, p, w, n] = await Promise.all([
+    api('/api/auth/me'),
     api('/api/predictions/me'),
     api('/api/wallet/history'),
     api('/api/notifications?limit=20')
   ]);
+  if (meResp.user) {
+    state.me = meResp.user;
+  }
   state.predictions = p.predictions || [];
   state.parlays = p.parlays || [];
   state.walletHistory = w.history || [];
@@ -936,7 +940,8 @@ function BetSlipUI() {
     if (!state.me) return setToast('Vui lòng đăng nhập', 'bad');
 
     if (state.betSlipType === 'parlay') {
-      const stake = Math.max(1, Number(state.parlayStake || 100));
+      const stake = Number(state.parlayStake !== undefined ? state.parlayStake : 100);
+      if (!Number.isFinite(stake) || stake < 1) return setToast('Số điểm cược không hợp lệ (phải >= 1)', 'bad');
       if (stake > walletPoints) return setToast('Không đủ điểm', 'bad');
 
       await runTask(async () => {
@@ -956,10 +961,23 @@ function BetSlipUI() {
     } else {
       // Single bets
       await runTask(async () => {
+        // Validate stakes
         for (const p of state.betSlip) {
           const pickKey = `${p.matchId}_${p.marketKey}_${p.optionKey}`;
           const rawStake = state.betSlipStakes[pickKey];
-          const stake = Math.max(1, Number(rawStake !== undefined ? rawStake : 100));
+          const stake = Number(rawStake !== undefined ? rawStake : 100);
+          if (!Number.isFinite(stake) || stake < 1) {
+            throw new Error('Số điểm cược không hợp lệ (phải >= 1)');
+          }
+          if (stake > walletPoints) {
+            throw new Error('Không đủ điểm');
+          }
+        }
+        
+        for (const p of state.betSlip) {
+          const pickKey = `${p.matchId}_${p.marketKey}_${p.optionKey}`;
+          const rawStake = state.betSlipStakes[pickKey];
+          const stake = Number(rawStake !== undefined ? rawStake : 100);
           await api('/api/predictions', {
             method: 'POST',
             body: {
@@ -1007,7 +1025,7 @@ function BetSlipUI() {
         state.betSlip.map((p, idx) => {
           const pickKey = `${p.matchId}_${p.marketKey}_${p.optionKey}`;
           const rawStake = state.betSlipStakes[pickKey] !== undefined ? state.betSlipStakes[pickKey] : 100;
-          const stakeNum = Math.max(1, Number(rawStake) || 0);
+          const stakeNum = Number(rawStake);
           const returnAmt = Math.round(stakeNum * Number(p.option.odds || 1));
           return e('div', { key: pickKey, className: 'bet-slip-item' },
             e('button', { className: 'bet-slip-item-remove', onClick: () => removePick(idx) }, '×'),
@@ -1036,7 +1054,7 @@ function BetSlipUI() {
           e('div', { className: 'bet-slip-input' },
             e('input', { type: 'number', min: 1, placeholder: 'Nhập điểm...', value: state.parlayStake !== undefined ? state.parlayStake : 100, onChange: ev => handleParlayStakeChange(ev.target.value) }),
             e('div', { className: 'bet-slip-payout' },
-              'Trả về: ', e('strong', null, formatNumber(Math.round(Math.max(1, Number(state.parlayStake !== undefined ? state.parlayStake : 100) || 0) * combinedOdds)))
+              'Trả về: ', e('strong', null, formatNumber(Math.round(Number(state.parlayStake !== undefined ? state.parlayStake : 100) * combinedOdds)))
             )
           )
         ) : null,
