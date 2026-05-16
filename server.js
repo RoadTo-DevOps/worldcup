@@ -44,6 +44,16 @@ const {
   getMultiplier
 } = require('./src/espn');
 
+function getSgpMultiplier(n) {
+  if (n <= 1) return 1.0;
+  if (n === 2) return 0.85;
+  if (n === 3) return 0.67;
+  if (n === 4) return 0.42;
+  if (n === 5) return 0.25;
+  if (n === 6) return 0.15;
+  return Math.pow(0.6, (n - 1));
+}
+
 const PORT = Number(process.env.PORT || 3000);
 const HEARTBEAT_MS = 25000;
 const REFRESH_LIVE_MS = Math.max(10000, Number(process.env.ESPN_LIVE_SYNC_SECONDS || 30) * 1000);
@@ -608,32 +618,52 @@ function settleParlays(match, settings) {
       });
       settledCount += 1;
     } else if (selection.status === 'won' || selection.status === 'push') {
-      const allSettled = parlay.selections.every(s => s.status !== 'pending');
-      if (allSettled) {
-        let finalMultiplier = 1.0;
-        let hasWon = false;
-        const wonByMatch = {};
-        
-        for (const s of parlay.selections) {
-          if (s.status === 'won') {
-            hasWon = true;
-            if (!wonByMatch[s.matchId]) wonByMatch[s.matchId] = [];
-            wonByMatch[s.matchId].push(s);
+      // Check if other matches in the parlay are already finished but not settled yet
+      for (const s of parlay.selections) {
+        if (s.status === 'pending') {
+          const m = db.matches.find(item => String(item.id) === String(s.matchId));
+          if (m && (String(m.status) === 'post' || m.isFinal)) {
+            const res = settleBetMarket(m, s, settings);
+            if (res.status !== 'pending') {
+              s.status = res.status;
+              s.multiplier = res.multiplier;
+            }
           }
         }
-        
-        if (!hasWon) {
-          parlay.status = 'push';
-          parlay.rewardPoints = Number(parlay.betPoints);
+      }
+
+      const allSettled = parlay.selections.every(s => s.status !== 'pending');
+      if (allSettled) {
+        const isLost = parlay.selections.some(s => s.status === 'lost');
+        if (isLost) {
+          parlay.status = 'lost';
+          parlay.rewardPoints = 0;
         } else {
-          parlay.status = 'won';
-          Object.values(wonByMatch).forEach(group => {
-            let groupMul = 1.0;
-            group.forEach(s => { groupMul *= Number(s.multiplier || 1); });
-            groupMul *= Math.pow(0.5, group.length - 1);
-            finalMultiplier *= groupMul;
-          });
-          parlay.rewardPoints = Math.round(Number(parlay.betPoints) * finalMultiplier);
+          let finalMultiplier = 1.0;
+          let hasWon = false;
+          const wonByMatch = {};
+          
+          for (const s of parlay.selections) {
+            if (s.status === 'won') {
+              hasWon = true;
+              if (!wonByMatch[s.matchId]) wonByMatch[s.matchId] = [];
+              wonByMatch[s.matchId].push(s);
+            }
+          }
+          
+          if (!hasWon) {
+            parlay.status = 'push';
+            parlay.rewardPoints = Number(parlay.betPoints);
+          } else {
+            parlay.status = 'won';
+            Object.values(wonByMatch).forEach(group => {
+              let groupMul = 1.0;
+              group.forEach(s => { groupMul *= Number(s.multiplier || 1); });
+              groupMul *= getSgpMultiplier(group.length);
+              finalMultiplier *= groupMul;
+            });
+            parlay.rewardPoints = Math.round(Number(parlay.betPoints) * finalMultiplier);
+          }
         }
         
         parlay.settledAt = new Date().toISOString();
@@ -951,14 +981,6 @@ async function handleApi(req, res, urlObj) {
       const optionKey = String(body.optionKey || '').trim();
       const pick = findMarketPick(match, marketKey, optionKey);
       if (!pick) return fail(res, 400, 'Bet market invalid');
-      const already = db.predictions.find((prediction) =>
-        String(prediction.userId) === String(user.id) &&
-        String(prediction.matchId) === String(match.id) &&
-        prediction.market?.marketKey === marketKey &&
-        prediction.market?.optionKey === optionKey &&
-        prediction.status === 'pending'
-      );
-      if (already) return fail(res, 409, 'This pick already exists');
 
       addTransaction({
         userId: user.id,
@@ -1061,15 +1083,6 @@ async function handleApi(req, res, urlObj) {
         });
       }
 
-      const getSgpMultiplier = (n) => {
-        if (n <= 1) return 1.0;
-        if (n === 2) return 0.85;
-        if (n === 3) return 0.67;
-        if (n === 4) return 0.42;
-        if (n === 5) return 0.25;
-        if (n === 6) return 0.15;
-        return Math.pow(0.6, n - 1);
-      };
 
       let combinedOdds = 1.0;
       Object.values(picksByMatch).forEach(group => {
