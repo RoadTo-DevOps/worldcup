@@ -46,6 +46,8 @@ function createDefaultDb() {
       nextPredictionId: 1,
       nextParlayId: 1,
       nextTransactionId: 1,
+      nextGiftCodeId: 1,
+      nextGiftRedemptionId: 1,
       nextChatMessageId: 1,
       nextNotificationId: 2
     },
@@ -55,6 +57,8 @@ function createDefaultDb() {
     predictions: [],
     parlays: [],
     walletTransactions: [],
+    giftCodes: [],
+    giftRedemptions: [],
     leaderboardHistory: [],
     chatMessages: [],
     notifications: [
@@ -184,6 +188,8 @@ function ensureSeedValues(db) {
   db.predictions ||= [];
   db.parlays ||= [];
   db.walletTransactions ||= [];
+  db.giftCodes ||= [];
+  db.giftRedemptions ||= [];
   db.leaderboardHistory ||= [];
   db.chatMessages ||= [];
   db.notifications ||= [];
@@ -192,6 +198,8 @@ function ensureSeedValues(db) {
   db.meta.nextPredictionId = Math.max(Number(db.meta.nextPredictionId || 1), maxId(db.predictions) + 1);
   db.meta.nextParlayId = Math.max(Number(db.meta.nextParlayId || 1), maxId(db.parlays) + 1);
   db.meta.nextTransactionId = Math.max(Number(db.meta.nextTransactionId || 1), maxId(db.walletTransactions) + 1);
+  db.meta.nextGiftCodeId = Math.max(Number(db.meta.nextGiftCodeId || 1), maxId(db.giftCodes) + 1);
+  db.meta.nextGiftRedemptionId = Math.max(Number(db.meta.nextGiftRedemptionId || 1), maxId(db.giftRedemptions) + 1);
   db.meta.nextChatMessageId = Math.max(Number(db.meta.nextChatMessageId || 1), maxId(db.chatMessages) + 1);
   db.meta.nextNotificationId = Math.max(Number(db.meta.nextNotificationId || 1), maxId(db.notifications) + 1);
 }

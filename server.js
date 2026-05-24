@@ -46,12 +46,12 @@ const {
 
 function getSgpMultiplier(n) {
   if (n <= 1) return 1.0;
-  if (n === 2) return 0.85;
-  if (n === 3) return 0.67;
-  if (n === 4) return 0.42;
-  if (n === 5) return 0.25;
-  if (n === 6) return 0.15;
-  return Math.pow(0.6, (n - 1));
+  if (n === 2) return 0.92;
+  if (n === 3) return 0.76;
+  if (n === 4) return 0.52;
+  if (n === 5) return 0.34;
+  if (n === 6) return 0.22;
+  return Math.pow(0.66, (n - 1));
 }
 
 const PORT = Number(process.env.PORT || 3000);
@@ -254,6 +254,98 @@ function findUserByLogin(identifier) {
 
 function findUserById(id) {
   return db.users.find((user) => String(user.id) === String(id));
+}
+
+function normalizeGiftCode(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function isValidGiftCode(code) {
+  return /^[A-Z0-9_-]{3,32}$/.test(code);
+}
+
+function findGiftCodeByCode(code) {
+  const normalized = normalizeGiftCode(code);
+  return db.giftCodes.find((giftCode) => normalizeGiftCode(giftCode.code) === normalized) || null;
+}
+
+function findGiftCodeById(id) {
+  return db.giftCodes.find((giftCode) => String(giftCode.id) === String(id)) || null;
+}
+
+function parseOptionalLimit(value, fieldName) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw Object.assign(new Error(`${fieldName} invalid`), { statusCode: 400 });
+  }
+  return parsed;
+}
+
+function parseOptionalExpiry(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = new Date(value);
+  if (!Number.isFinite(parsed.getTime())) {
+    throw Object.assign(new Error('Expiry invalid'), { statusCode: 400 });
+  }
+  return parsed.toISOString();
+}
+
+function giftCodeExpired(giftCode) {
+  if (!giftCode.expiresAt) return false;
+  const expires = new Date(giftCode.expiresAt).getTime();
+  return Number.isFinite(expires) && expires <= Date.now();
+}
+
+function serializeGiftCode(giftCode) {
+  const maxUses = giftCode.maxUses === null || giftCode.maxUses === undefined ? null : Number(giftCode.maxUses);
+  const uses = Number(giftCode.uses || 0);
+  const expired = giftCodeExpired(giftCode);
+  return {
+    ...giftCode,
+    amount: Number(giftCode.amount || 0),
+    uses,
+    maxUses,
+    perUserLimit: Number(giftCode.perUserLimit || 1),
+    active: giftCode.active !== false,
+    expired,
+    remainingUses: maxUses === null ? null : Math.max(0, maxUses - uses)
+  };
+}
+
+function giftCodeRedemptionCount(giftCodeId, userId) {
+  return db.giftRedemptions.filter((redemption) => (
+    String(redemption.giftCodeId) === String(giftCodeId) &&
+    String(redemption.userId) === String(userId)
+  )).length;
+}
+
+function validateGiftCodeInput(body, existing = null) {
+  const code = existing ? existing.code : normalizeGiftCode(body.code);
+  if (!existing) {
+    if (!isValidGiftCode(code)) throw Object.assign(new Error('Gift code invalid'), { statusCode: 400 });
+    if (findGiftCodeByCode(code)) throw Object.assign(new Error('Gift code already exists'), { statusCode: 409 });
+  }
+
+  const amount = body.amount === undefined && existing ? Number(existing.amount || 0) : Number(body.amount);
+  if (!Number.isInteger(amount) || amount < 1) {
+    throw Object.assign(new Error('Amount invalid'), { statusCode: 400 });
+  }
+
+  const uses = Number(existing?.uses || 0);
+  const maxUses = body.maxUses === undefined && existing ? (existing.maxUses ?? null) : parseOptionalLimit(body.maxUses, 'Max uses');
+  if (maxUses !== null && maxUses < uses) {
+    throw Object.assign(new Error('Max uses cannot be below current uses'), { statusCode: 400 });
+  }
+
+  const perUserLimit = body.perUserLimit === undefined && existing
+    ? Number(existing.perUserLimit || 1)
+    : parseOptionalLimit(body.perUserLimit || 1, 'Per-user limit');
+  const expiresAt = body.expiresAt === undefined && existing ? (existing.expiresAt || null) : parseOptionalExpiry(body.expiresAt);
+  const description = String(body.description ?? existing?.description ?? '').trim().slice(0, 160);
+  const active = body.active === undefined ? (existing ? existing.active !== false : true) : Boolean(body.active);
+
+  return { code, amount, maxUses, perUserLimit, expiresAt, description, active };
 }
 
 function activeAdminCount() {
@@ -833,12 +925,6 @@ async function handleApi(req, res, urlObj) {
         stats: { predictions: 0, correct: 0, exact: 0 }
       };
       db.users.push(user);
-      addTransaction({
-        userId: user.id,
-        type: 'welcome',
-        amount: db.settings.initialBalance,
-        note: 'Welcome bonus'
-      });
       maybePersist();
       const token = buildAuthToken(user, Boolean(body.remember));
       return ok(res, 'Registered', {
@@ -1159,9 +1245,62 @@ async function handleApi(req, res, urlObj) {
       if (!user) return;
       const history = db.walletTransactions
         .filter((transaction) => String(transaction.userId) === String(user.id))
-        .filter((transaction) => ['admin_add', 'admin_deduct'].includes(String(transaction.type || '')))
+        .filter((transaction) => ['admin_add', 'admin_deduct', 'gift_code'].includes(String(transaction.type || '')))
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       return ok(res, 'Wallet history', { history });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/gift-codes/redeem') {
+      const user = requireUser(req, res);
+      if (!user) return;
+      const body = await readBody(req);
+      const code = normalizeGiftCode(body.code);
+      if (!isValidGiftCode(code)) return fail(res, 400, 'Gift code invalid');
+      const giftCode = findGiftCodeByCode(code);
+      if (!giftCode) return fail(res, 404, 'Gift code not found');
+      if (giftCode.active === false) return fail(res, 400, 'Gift code inactive');
+      if (giftCodeExpired(giftCode)) return fail(res, 400, 'Gift code expired');
+      const amount = Number(giftCode.amount || 0);
+      if (!Number.isInteger(amount) || amount < 1) return fail(res, 400, 'Gift code amount invalid');
+      const uses = Number(giftCode.uses || 0);
+      const maxUses = giftCode.maxUses === null || giftCode.maxUses === undefined ? null : Number(giftCode.maxUses);
+      if (maxUses !== null && uses >= maxUses) return fail(res, 400, 'Gift code fully used');
+      const perUserLimit = Number(giftCode.perUserLimit || 1);
+      if (giftCodeRedemptionCount(giftCode.id, user.id) >= perUserLimit) {
+        return fail(res, 400, 'You already used this gift code');
+      }
+
+      const transaction = addTransaction({
+        userId: user.id,
+        type: 'gift_code',
+        amount,
+        note: `Gift code ${giftCode.code}`,
+        relatedId: giftCode.id
+      });
+      const redemption = {
+        id: nextId(db, 'nextGiftRedemptionId'),
+        giftCodeId: giftCode.id,
+        code: giftCode.code,
+        userId: user.id,
+        amount,
+        transactionId: transaction.id,
+        createdAt: new Date().toISOString()
+      };
+      giftCode.uses = uses + 1;
+      giftCode.updatedAt = new Date().toISOString();
+      db.giftRedemptions.push(redemption);
+      notifyUser(user.id, 'Gift code redeemed', `Gift code ${giftCode.code} added ${amount} points.`, {
+        type: 'gift_code',
+        giftCodeId: giftCode.id
+      });
+      maybePersist();
+      broadcast('wallet.updated', { userId: user.id });
+      broadcast('leaderboard.updated', { userId: user.id });
+      return ok(res, 'Gift code redeemed', {
+        user: toSafeUser(user),
+        transaction,
+        redemption
+      });
     }
 
     if (req.method === 'GET' && pathname === '/api/leaderboard') {
@@ -1226,6 +1365,68 @@ async function handleApi(req, res, urlObj) {
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
         .slice(0, limit);
       return ok(res, 'Notifications', { notifications });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/admin/gift-codes') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const giftCodes = db.giftCodes
+        .map(serializeGiftCode)
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      return ok(res, 'Gift codes', { giftCodes });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/admin/gift-codes') {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const body = await readBody(req);
+      let input;
+      try {
+        input = validateGiftCodeInput(body);
+      } catch (error) {
+        return fail(res, error.statusCode || 400, error.message);
+      }
+      const now = new Date().toISOString();
+      const giftCode = {
+        id: nextId(db, 'nextGiftCodeId'),
+        code: input.code,
+        amount: input.amount,
+        description: input.description,
+        active: input.active,
+        maxUses: input.maxUses,
+        uses: 0,
+        perUserLimit: input.perUserLimit,
+        expiresAt: input.expiresAt,
+        createdByAdmin: String(admin.id),
+        createdAt: now,
+        updatedAt: now
+      };
+      db.giftCodes.push(giftCode);
+      maybePersist();
+      return ok(res, 'Gift code created', { giftCode: serializeGiftCode(giftCode) });
+    }
+
+    if (req.method === 'PATCH' && pathname.startsWith('/api/admin/gift-codes/')) {
+      const admin = requireAdmin(req, res);
+      if (!admin) return;
+      const giftCode = findGiftCodeById(pathname.split('/')[4]);
+      if (!giftCode) return fail(res, 404, 'Gift code not found');
+      const body = await readBody(req).catch(() => ({}));
+      let input;
+      try {
+        input = validateGiftCodeInput(body, giftCode);
+      } catch (error) {
+        return fail(res, error.statusCode || 400, error.message);
+      }
+      giftCode.amount = input.amount;
+      giftCode.description = input.description;
+      giftCode.active = input.active;
+      giftCode.maxUses = input.maxUses;
+      giftCode.perUserLimit = input.perUserLimit;
+      giftCode.expiresAt = input.expiresAt;
+      giftCode.updatedAt = new Date().toISOString();
+      maybePersist();
+      return ok(res, 'Gift code updated', { giftCode: serializeGiftCode(giftCode) });
     }
 
     if (req.method === 'GET' && pathname === '/api/admin/users') {

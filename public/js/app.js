@@ -234,19 +234,21 @@ async function loadRouteData() {
 }
 
 async function loadAdminData() {
-  const [u, tx, cfg, m, p] = await Promise.all([
+  const [u, tx, cfg, m, p, gc] = await Promise.all([
     api('/api/admin/users'),
     api('/api/admin/transactions'),
     api('/api/admin/config'),
     api('/api/admin/matches'),
-    api('/api/admin/predictions?status=pending')
+    api('/api/admin/predictions?status=pending'),
+    api('/api/admin/gift-codes')
   ]);
   state.admin = {
     users: u.users || [],
     transactions: tx.transactions || [],
     settings: cfg.settings || {},
     matches: m.matches || [],
-    predictions: p.predictions || []
+    predictions: p.predictions || [],
+    giftCodes: gc.giftCodes || []
   };
 }
 
@@ -921,12 +923,12 @@ function BetSlipUI() {
 
   const getSgpMultiplier = (n) => {
     if (n <= 1) return 1.0;
-    if (n === 2) return 0.85;
-    if (n === 3) return 0.67;
-    if (n === 4) return 0.42;
-    if (n === 5) return 0.25;
-    if (n === 6) return 0.15;
-    return Math.pow(0.6, n - 1);
+    if (n === 2) return 0.92;
+    if (n === 3) return 0.76;
+    if (n === 4) return 0.52;
+    if (n === 5) return 0.34;
+    if (n === 6) return 0.22;
+    return Math.pow(0.66, n - 1);
   };
 
   Object.values(picksByMatch).forEach(group => {
@@ -1048,9 +1050,10 @@ function BetSlipUI() {
       e('div', { className: 'bet-slip-footer' },
         state.betSlipType === 'parlay' ? e(React.Fragment, null,
           e('div', { className: 'bet-slip-summary' },
-            e('span', null, 'Tỷ lệ xiên (Combined Odds):'),
+            e('span', null, 'Tỷ lệ xiên tổng:'),
             e('span', { className: 'bet-slip-total-odds' }, oddsValue(combinedOdds))
           ),
+          e('div', { className: 'bet-slip-note' }, 'Tỷ lệ xiên đã được nâng nhẹ'),
           e('div', { className: 'bet-slip-input' },
             e('input', { type: 'number', min: 1, placeholder: 'Nhập điểm...', value: state.parlayStake !== undefined ? state.parlayStake : 100, onChange: ev => handleParlayStakeChange(ev.target.value) }),
             e('div', { className: 'bet-slip-payout' },
@@ -1058,7 +1061,7 @@ function BetSlipUI() {
             )
           )
         ) : null,
-        e('button', { className: 'primary-button', onClick: handlePlaceBet, style: { width: '100%' } }, 'Xác nhận Đặt cược')
+        e('button', { className: 'primary-button', onClick: handlePlaceBet, style: { width: '100%' } }, 'Xác nhận đặt cược')
       )
     )
   );
@@ -1201,6 +1204,7 @@ function ProfilePage() {
       ),
       e('div', { className: 'panel' },
         e('div', { className: 'section-head' }, e('h2', null, 'Wallet history')),
+        e(GiftCodeRedeemForm, null),
         e(WalletHistory, null)
       )
     )
@@ -1271,11 +1275,50 @@ function ParlaysHistory() {
   );
 }
 
+function GiftCodeRedeemForm() {
+  const [code, setCode] = React.useState('');
+
+  const handleSubmit = async ev => {
+    ev.preventDefault();
+    const giftCode = code.trim();
+    if (!giftCode) {
+      setToast('Nhập gift code trước đã.', 'bad');
+      notify();
+      return;
+    }
+    await runTask(async () => {
+      const data = await api('/api/gift-codes/redeem', { method: 'POST', body: { code: giftCode } });
+      if (data.user) state.me = data.user;
+      setCode('');
+      await refreshPrivateData();
+      await refreshPublicData();
+    }, 'Đã nhận gift code');
+  };
+
+  return e('form', { className: 'gift-code-form', onSubmit: handleSubmit },
+    e('label', null, 'Gift code',
+      e('input', {
+        type: 'text',
+        placeholder: 'VD: WORLD2026',
+        value: code,
+        maxLength: 32,
+        onChange: ev => setCode(ev.target.value.toUpperCase())
+      })
+    ),
+    e('button', { className: 'primary-button', type: 'submit' }, 'Nhận điểm')
+  );
+}
+
 function WalletHistory() {
   if (!state.walletHistory.length) return e('div', { className: 'empty' }, 'No transactions yet.');
   return e('div', { className: 'stack-list' },
     state.walletHistory.slice(0, 12).map((tx, i) => {
-      const title = tx.type === 'admin_add' ? 'Admin cộng điểm' : 'Admin trừ điểm';
+      const titleMap = {
+        admin_add: 'Admin cộng điểm',
+        admin_deduct: 'Admin trừ điểm',
+        gift_code: 'Gift code'
+      };
+      const title = titleMap[tx.type] || tx.type || 'Giao dịch';
       return e('div', { key: i, className: 'history-row' },
         e('div', null, e('b', null, title), e('span', null, clampText(tx.note || 'Admin adjustment'))),
         e('strong', { className: Number(tx.amount) >= 0 ? 'good' : 'bad' },
@@ -1339,6 +1382,7 @@ function AdminPage() {
       e('button', { className: 'primary-button', onClick: handleSync }, 'Force ESPN sync')
     ),
     e(AdminPointsForm, null),
+    e(AdminGiftCodesPanel, null),
     e('section', { className: 'panel' },
       e('div', { className: 'section-head' }, e('h2', null, 'Users'), e('span', null, formatNumber(state.admin.users.length))),
       e('div', { className: 'table-wrap' },
@@ -1419,6 +1463,96 @@ function AdminPage() {
         )
         : e('div', { className: 'empty' }, 'No pending bets.')
     )
+  );
+}
+
+function AdminGiftCodesPanel() {
+  const giftCodes = state.admin?.giftCodes || [];
+  const [code, setCode] = React.useState('');
+  const [amount, setAmount] = React.useState(100);
+  const [description, setDescription] = React.useState('');
+  const [maxUses, setMaxUses] = React.useState('');
+  const [perUserLimit, setPerUserLimit] = React.useState(1);
+  const [expiresAt, setExpiresAt] = React.useState('');
+  const [active, setActive] = React.useState(true);
+
+  const handleSubmit = async ev => {
+    ev.preventDefault();
+    await runTask(async () => {
+      await api('/api/admin/gift-codes', {
+        method: 'POST',
+        body: { code, amount: Number(amount), description, maxUses, perUserLimit: Number(perUserLimit), expiresAt, active }
+      });
+      setCode('');
+      setAmount(100);
+      setDescription('');
+      setMaxUses('');
+      setPerUserLimit(1);
+      setExpiresAt('');
+      setActive(true);
+      await loadAdminData();
+    }, 'Gift code created');
+  };
+
+  const toggleActive = giftCode => runTask(async () => {
+    await api(`/api/admin/gift-codes/${giftCode.id}`, {
+      method: 'PATCH',
+      body: { active: !giftCode.active }
+    });
+    await loadAdminData();
+  }, giftCode.active ? 'Gift code disabled' : 'Gift code enabled');
+
+  return e('section', { className: 'panel' },
+    e('div', { className: 'section-head' }, e('h2', null, 'Gift codes'), e('span', null, formatNumber(giftCodes.length))),
+    e('form', { className: 'form-grid gift-code-admin-form', onSubmit: handleSubmit },
+      e('label', null, 'Code',
+        e('input', { required: true, maxLength: 32, placeholder: 'WORLD2026', value: code, onChange: ev => setCode(ev.target.value.toUpperCase()) })
+      ),
+      e('label', null, 'Amount',
+        e('input', { type: 'number', min: 1, required: true, value: amount, onChange: ev => setAmount(ev.target.value) })
+      ),
+      e('label', null, 'Max uses',
+        e('input', { type: 'number', min: 1, placeholder: 'Unlimited', value: maxUses, onChange: ev => setMaxUses(ev.target.value) })
+      ),
+      e('label', null, 'Per user',
+        e('input', { type: 'number', min: 1, required: true, value: perUserLimit, onChange: ev => setPerUserLimit(ev.target.value) })
+      ),
+      e('label', null, 'Expires',
+        e('input', { type: 'date', value: expiresAt, onChange: ev => setExpiresAt(ev.target.value) })
+      ),
+      e('label', { className: 'check' },
+        e('input', { type: 'checkbox', checked: active, onChange: ev => setActive(ev.target.checked) }),
+        ' Active'
+      ),
+      e('label', { className: 'full' }, 'Description',
+        e('input', { maxLength: 160, placeholder: 'Campaign note', value: description, onChange: ev => setDescription(ev.target.value) })
+      ),
+      e('button', { className: 'secondary-button full', type: 'submit' }, 'Create gift code')
+    ),
+    giftCodes.length
+      ? e('div', { className: 'table-wrap gift-code-table' },
+        e('table', null,
+          e('thead', null,
+            e('tr', null,
+              e('th', null, 'Code'), e('th', null, 'Amount'), e('th', null, 'Uses'),
+              e('th', null, 'Expires'), e('th', null, 'Status'), e('th', null, 'Actions')
+            )
+          ),
+          e('tbody', null,
+            giftCodes.map(giftCode => e('tr', { key: giftCode.id },
+              e('td', null, e('b', null, giftCode.code), giftCode.description ? e('span', null, giftCode.description) : null),
+              e('td', null, formatNumber(giftCode.amount)),
+              e('td', null, `${formatNumber(giftCode.uses || 0)} / ${giftCode.maxUses ? formatNumber(giftCode.maxUses) : '∞'}`),
+              e('td', null, giftCode.expiresAt ? formatDateTime(giftCode.expiresAt) : 'Never'),
+              e('td', null, giftCode.expired ? 'Expired' : (giftCode.active ? 'Active' : 'Inactive')),
+              e('td', { className: 'actions' },
+                e('button', { className: `ghost-button${giftCode.active ? ' danger' : ''}`, onClick: () => toggleActive(giftCode) }, giftCode.active ? 'Disable' : 'Enable')
+              )
+            ))
+          )
+        )
+      )
+      : e('div', { className: 'empty' }, 'No gift codes yet.')
   );
 }
 
@@ -1547,6 +1681,11 @@ function RegisterPage() {
     e('section', { className: 'auth-solo' },
       e('div', { className: 'panel auth-panel' },
         e('div', { className: 'section-head' }, e('h2', null, 'T\u1ea1o t\u00e0i kho\u1ea3n')),
+        e('div', { className: 'welcome-bonus-card zero-balance-card' },
+          e('span', null, 'T\u00e0i kho\u1ea3n m\u1edbi'),
+          e('strong', null, '0 \u0111i\u1ec3m'),
+          e('small', null, '\u0110i\u1ec3m s\u1ebd ch\u1ec9 thay \u0111\u1ed5i khi tham gia d\u1ef1 \u0111o\u00e1n ho\u1eb7c \u0111\u01b0\u1ee3c admin c\u1ed9ng.')
+        ),
         e('form', { className: 'form-grid', onSubmit: handleSubmit },
           e('label', null, 'T\u00ean \u0111\u0103ng nh\u1eadp',
             e('input', { type: 'text', minLength: 2, autoComplete: 'username', required: true, value: username, onChange: ev => setUsername(ev.target.value) })

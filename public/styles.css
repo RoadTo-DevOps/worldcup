@@ -750,24 +750,31 @@ input:focus, select:focus {
 }
 
 .market-option {
-  background: rgba(20, 25, 30, 0.8);
+  background: rgba(20, 25, 30, 0.82);
   padding: 16px;
+  min-height: 88px;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.04);
   border-radius: 0;
   color: var(--text);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
 .market-option:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(16, 185, 129, 0.26);
+  transform: translateY(-1px);
 }
 
 .market-option.selected {
-  background: rgba(16, 185, 129, 0.15);
-  box-shadow: inset 0 0 0 2px var(--green);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.22), rgba(5, 150, 105, 0.12));
+  border-color: rgba(16, 185, 129, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.8), 0 10px 24px rgba(16, 185, 129, 0.12);
 }
 
 .market-option.selected strong {
@@ -777,16 +784,18 @@ input:focus, select:focus {
 .market-option b {
   font-size: 13px;
   color: var(--muted);
-  font-weight: 500;
+  font-weight: 600;
+  text-align: center;
 }
 
 .market-option strong {
-  font-size: 16px;
-  font-weight: 800;
+  font-size: 17px;
+  font-weight: 900;
   color: var(--green);
-  background: rgba(16, 185, 129, 0.1);
-  padding: 4px 8px;
-  border-radius: 6px;
+  background: rgba(16, 185, 129, 0.12);
+  padding: 5px 10px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.16);
 }
 
 .market-option.selected strong {
@@ -969,12 +978,12 @@ tr:hover td {
   position: fixed;
   bottom: 90px;
   right: 24px;
-  width: 360px;
-  background: rgba(15, 20, 25, 0.95);
+  width: min(390px, calc(100vw - 32px));
+  background: rgba(15, 20, 25, 0.96);
   backdrop-filter: blur(20px);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  border-radius: 16px;
-  box-shadow: var(--shadow-lg);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(255, 255, 255, 0.04);
   z-index: 100;
   display: flex;
   flex-direction: column;
@@ -1030,11 +1039,18 @@ tr:hover td {
 }
 
 .bet-slip-item {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid var(--line-light);
-  border-radius: 12px;
-  padding: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 14px;
   position: relative;
+  transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+}
+
+.bet-slip-item:hover {
+  background: rgba(255, 255, 255, 0.055);
+  border-color: rgba(16, 185, 129, 0.24);
+  transform: translateY(-1px);
 }
 
 .bet-slip-item-remove {
@@ -1083,12 +1099,24 @@ tr:hover td {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(16, 185, 129, 0.04));
 }
 
 .bet-slip-total-odds {
-  font-size: 20px;
-  font-weight: 800;
+  font-size: 22px;
+  font-weight: 900;
   color: var(--green);
+}
+
+.bet-slip-note {
+  margin-top: -4px;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 .bet-slip-tabs {
@@ -1208,14 +1236,27 @@ tr:hover td {
 
 .auth-panel {
   width: 100%;
-  max-width: 440px;
-  background: var(--panel-2);
+  max-width: 480px;
+  background: linear-gradient(160deg, rgba(23, 34, 44, 0.88), rgba(6, 12, 18, 0.94));
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--line-light);
+  border: 1px solid rgba(16, 185, 129, 0.22);
   padding: 40px;
   box-shadow: var(--shadow-lg), var(--shadow-glow);
   animation: authSlideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.auth-panel::before {
+  content: '';
+  position: absolute;
+  inset: -120px -120px auto auto;
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(16, 185, 129, 0.2), transparent 65%);
+  pointer-events: none;
 }
 
 @keyframes authSlideUp {
@@ -1228,6 +1269,49 @@ tr:hover td {
   margin-bottom: 8px;
   text-align: center;
   width: 100%;
+  position: relative;
+  z-index: 1;
+}
+
+.welcome-bonus-card {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 4px;
+  margin: 0 0 22px;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(16, 185, 129, 0.32);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.16), rgba(6, 182, 212, 0.08));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 14px 36px rgba(0, 0, 0, 0.22);
+  text-align: center;
+}
+
+.welcome-bonus-card span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.welcome-bonus-card strong {
+  color: var(--green);
+  font-family: var(--font-heading);
+  font-size: 34px;
+  line-height: 1;
+  text-shadow: 0 0 20px rgba(16, 185, 129, 0.35);
+}
+
+.welcome-bonus-card small {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.auth-panel .form-grid,
+.auth-panel .auth-switch {
+  position: relative;
+  z-index: 1;
 }
 
 .auth-switch {
@@ -1318,6 +1402,32 @@ tr:hover td {
 .auth-btn {
   margin: 12px auto 0;
   min-width: 200px;
+}
+
+.gift-code-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid rgba(16, 185, 129, 0.22);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 182, 212, 0.05));
+}
+
+.gift-code-admin-form {
+  margin-bottom: 20px;
+}
+
+.gift-code-table td:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.gift-code-table td:first-child span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .history-row {
@@ -1487,6 +1597,10 @@ tr:hover td {
     padding: 24px 16px;
   }
   
+  .gift-code-form {
+    grid-template-columns: 1fr;
+  }
+
   /* Tables */
   .table-wrap {
     margin: 0 -24px;
