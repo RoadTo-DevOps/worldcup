@@ -14,6 +14,7 @@ const STATE_ID = 'worldcup-prediction-state';
 let mongoClient = null;
 let mongoCollection = null;
 let storageMode = 'json';
+let saveChain = Promise.resolve();
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const retention = {
@@ -90,11 +91,11 @@ function readJsonFallback() {
   return JSON.parse(raw);
 }
 
-function writeJsonFallback(db) {
+async function writeJsonFallback(db) {
   ensureDbFile();
   const tmpPath = `${DB_PATH}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(db, null, 2), 'utf8');
-  fs.renameSync(tmpPath, DB_PATH);
+  await fs.promises.writeFile(tmpPath, JSON.stringify(db, null, 2), 'utf8');
+  await fs.promises.rename(tmpPath, DB_PATH);
 }
 
 async function connectMongo() {
@@ -146,10 +147,10 @@ async function loadDb() {
   return db;
 }
 
-async function saveDb(db) {
+async function persistDb(db) {
   ensureSeedValues(db);
   pruneDb(db);
-  writeJsonFallback(db);
+  await writeJsonFallback(db);
 
   try {
     const collection = await connectMongo();
@@ -171,6 +172,11 @@ async function saveDb(db) {
     storageMode = 'json';
     console.warn(`[store] MongoDB save skipped: ${error.message}`);
   }
+}
+
+async function saveDb(db) {
+  saveChain = saveChain.catch(() => {}).then(() => persistDb(db));
+  return saveChain;
 }
 
 function nextId(db, key) {

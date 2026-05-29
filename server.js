@@ -375,9 +375,23 @@ function deleteUserAccount(user) {
   };
 }
 
-function serializeMatch(match, userId = null) {
+function groupBy(items, keyFn) {
+  const groups = new Map();
+  for (const item of items || []) {
+    const key = String(keyFn(item));
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return groups;
+}
+
+function mapById(items) {
+  return new Map((items || []).map((item) => [String(item.id), item]));
+}
+
+function serializeMatch(match, userId = null, userPredictionsByMatchId = null) {
   const userPredictions = userId
-    ? db.predictions.filter((item) => String(item.userId) === String(userId) && String(item.matchId) === String(match.id))
+    ? (userPredictionsByMatchId?.get(String(match.id)) || db.predictions.filter((item) => String(item.userId) === String(userId) && String(item.matchId) === String(match.id)))
     : [];
   return {
     ...match,
@@ -436,13 +450,20 @@ function buildLeaderboard(period = 'all-time') {
       totals.set(String(tx.userId), current + Number(tx.amount || 0));
     }
   }
+  const predictionStatsByUser = new Map();
+  for (const prediction of db.predictions) {
+    if (prediction.status === 'pending') continue;
+    const userId = String(prediction.userId);
+    const stats = predictionStatsByUser.get(userId) || { settled: 0, correct: 0 };
+    stats.settled += 1;
+    if (Number(prediction.rewardPoints || 0) > 0) stats.correct += 1;
+    predictionStatsByUser.set(userId, stats);
+  }
   const source = db.users
     .filter((user) => !user.banned)
     .map((user) => {
-      const predictions = db.predictions.filter((prediction) => String(prediction.userId) === String(user.id));
-      const settled = predictions.filter((prediction) => prediction.status !== 'pending');
-      const correct = settled.filter((prediction) => Number(prediction.rewardPoints || 0) > 0);
-      const accuracy = settled.length ? Math.round((correct.length / settled.length) * 1000) / 10 : 0;
+      const stats = predictionStatsByUser.get(String(user.id)) || { settled: 0, correct: 0 };
+      const accuracy = stats.settled ? Math.round((stats.correct / stats.settled) * 1000) / 10 : 0;
       const periodPoints = start ? totals.get(String(user.id)) || 0 : Number(user.points || 0);
       return {
         id: user.id,
@@ -452,8 +473,8 @@ function buildLeaderboard(period = 'all-time') {
         walletBalance: Number(user.walletBalance || 0),
         periodPoints,
         accuracy,
-        predictions: settled.length,
-        correctPredictions: correct.length
+        predictions: stats.settled,
+        correctPredictions: stats.correct
       };
     });
 
@@ -1000,7 +1021,13 @@ async function handleApi(req, res, urlObj) {
     }
 
     if (req.method === 'GET' && pathname === '/api/matches/live') {
-      const liveMatches = db.matches.filter((match) => match.isLive || String(match.status) === 'in').map((match) => serializeMatch(match, currentUser(req)?.id));
+      const user = currentUser(req);
+      const userPredictionsByMatchId = user
+        ? groupBy(db.predictions.filter((prediction) => String(prediction.userId) === String(user.id)), (prediction) => prediction.matchId)
+        : null;
+      const liveMatches = db.matches
+        .filter((match) => match.isLive || String(match.status) === 'in')
+        .map((match) => serializeMatch(match, user?.id, userPredictionsByMatchId));
       return ok(res, 'Live matches', { matches: liveMatches });
     }
 
@@ -1029,8 +1056,11 @@ async function handleApi(req, res, urlObj) {
         matches = matches.filter((match) => `${match.homeTeam} ${match.awayTeam} ${match.leagueLabel}`.toLowerCase().includes(q));
       }
       matches.sort((a, b) => new Date(a.kickoffTime) - new Date(b.kickoffTime));
+      const userPredictionsByMatchId = user
+        ? groupBy(db.predictions.filter((prediction) => String(prediction.userId) === String(user.id)), (prediction) => prediction.matchId)
+        : null;
       return ok(res, 'Matches', {
-        matches: matches.map((match) => serializeMatch(match, user?.id))
+        matches: matches.map((match) => serializeMatch(match, user?.id, userPredictionsByMatchId))
       });
     }
 
@@ -1045,8 +1075,11 @@ async function handleApi(req, res, urlObj) {
           ...message,
           user: toSafeUser(findUserById(message.userId))
         }));
+      const userPredictionsByMatchId = user
+        ? groupBy(db.predictions.filter((prediction) => String(prediction.userId) === String(user.id) && String(prediction.matchId) === matchId), (prediction) => prediction.matchId)
+        : null;
       return ok(res, 'Match detail', {
-        match: serializeMatch(match, user?.id),
+        match: serializeMatch(match, user?.id, userPredictionsByMatchId),
         chat
       });
     }
@@ -1209,14 +1242,15 @@ async function handleApi(req, res, urlObj) {
     if (req.method === 'GET' && pathname === '/api/predictions/me') {
       const user = requireUser(req, res);
       if (!user) return;
+      const matchesById = mapById(db.matches);
       const predictions = db.predictions
         .filter((prediction) => String(prediction.userId) === String(user.id))
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
         .map((prediction) => ({
           ...prediction,
-          match: db.matches.find((match) => String(match.id) === String(prediction.matchId)) || null
+          match: matchesById.get(String(prediction.matchId)) || null
         }));
-      
+
       const parlays = (db.parlays || [])
         .filter((parlay) => String(parlay.userId) === String(user.id))
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
@@ -1224,7 +1258,7 @@ async function handleApi(req, res, urlObj) {
           ...parlay,
           selections: parlay.selections.map(s => ({
             ...s,
-            match: db.matches.find(m => String(m.id) === String(s.matchId)) || null
+            match: matchesById.get(String(s.matchId)) || null
           }))
         }));
 
@@ -1432,15 +1466,22 @@ async function handleApi(req, res, urlObj) {
     if (req.method === 'GET' && pathname === '/api/admin/users') {
       const admin = requireAdmin(req, res);
       if (!admin) return;
+      const statsByUser = new Map();
+      for (const prediction of db.predictions) {
+        if (prediction.status === 'pending') continue;
+        const userId = String(prediction.userId);
+        const stats = statsByUser.get(userId) || { predictions: 0, correct: 0 };
+        stats.predictions += 1;
+        if (Number(prediction.rewardPoints || 0) > 0) stats.correct += 1;
+        statsByUser.set(userId, stats);
+      }
       const users = db.users.map((user) => {
-        const predictions = db.predictions.filter((prediction) => String(prediction.userId) === String(user.id));
-        const settled = predictions.filter((prediction) => prediction.status !== 'pending');
-        const correct = settled.filter((prediction) => Number(prediction.rewardPoints || 0) > 0);
+        const stats = statsByUser.get(String(user.id)) || { predictions: 0, correct: 0 };
         return {
           ...toSafeUser(user),
           stats: {
-            predictions: settled.length,
-            correct: correct.length,
+            predictions: stats.predictions,
+            correct: stats.correct,
             exact: Number(user.stats?.exact || 0)
           }
         };
@@ -1462,13 +1503,15 @@ async function handleApi(req, res, urlObj) {
       const admin = requireAdmin(req, res);
       if (!admin) return;
       const status = String(searchParams.get('status') || 'all');
+      const usersById = mapById(db.users);
+      const matchesById = mapById(db.matches);
       const predictions = db.predictions
         .filter((prediction) => status === 'all' || prediction.status === status)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
         .map((prediction) => ({
           ...prediction,
-          user: toSafeUser(findUserById(prediction.userId)),
-          match: db.matches.find((match) => String(match.id) === String(prediction.matchId)) || null
+          user: toSafeUser(usersById.get(String(prediction.userId))),
+          match: matchesById.get(String(prediction.matchId)) || null
         }));
       return ok(res, 'Predictions', { predictions });
     }
@@ -1605,7 +1648,7 @@ async function handleApi(req, res, urlObj) {
     if (req.method === 'GET' && pathname === '/api/admin/matches') {
       const admin = requireAdmin(req, res);
       if (!admin) return;
-      return ok(res, 'Matches', { matches: db.matches.map((match) => serializeMatch(match)) });
+      return ok(res, 'Matches', { matches: db.matches.map((match) => serializeMatch(match, null)) });
     }
 
     if (req.method === 'GET' && pathname === '/api/snapshot') {
@@ -1670,7 +1713,12 @@ async function bootstrap() {
   ensureSeedValues(db);
   ensureSeedUsers();
   const server = http.createServer((req, res) => {
-    const urlObj = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    let urlObj;
+    try {
+      urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    } catch {
+      return fail(res, 400, 'Bad request');
+    }
     if (urlObj.pathname === '/api/stream') {
       return handleStream(req, res, urlObj);
     }

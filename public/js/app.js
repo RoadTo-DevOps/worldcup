@@ -257,21 +257,33 @@ function openStream() {
   const token = getToken();
   if (!token) return;
   const stream = new EventSource(`/api/stream?token=${encodeURIComponent(token)}`);
-  stream.addEventListener('matches.updated', refreshFromStream);
-  stream.addEventListener('leaderboard.updated', refreshFromStream);
-  stream.addEventListener('wallet.updated', refreshFromStream);
-  stream.addEventListener('chat.message', refreshFromStream);
-  stream.addEventListener('chat.deleted', refreshFromStream);
+  stream.addEventListener('matches.updated', ev => scheduleStreamRefresh(ev, ['public', 'matchRoute', 'admin']));
+  stream.addEventListener('leaderboard.updated', ev => scheduleStreamRefresh(ev, ['public', 'private']));
+  stream.addEventListener('wallet.updated', ev => scheduleStreamRefresh(ev, ['private']));
+  stream.addEventListener('chat.message', ev => scheduleStreamRefresh(ev, ['matchRoute']));
+  stream.addEventListener('chat.deleted', ev => scheduleStreamRefresh(ev, ['matchRoute']));
   stream.onerror = () => { };
   state.stream = stream;
 }
 
+const pendingStreamRefresh = new Set();
+let streamRefreshTimer = null;
+
+function scheduleStreamRefresh(_event, domains) {
+  for (const domain of domains) pendingStreamRefresh.add(domain);
+  window.clearTimeout(streamRefreshTimer);
+  streamRefreshTimer = window.setTimeout(refreshFromStream, 150);
+}
+
 async function refreshFromStream() {
+  const domains = new Set(pendingStreamRefresh);
+  pendingStreamRefresh.clear();
+  const page = routeName();
   try {
-    await refreshPublicData();
-    if (state.me) await refreshPrivateData();
-    if (routeName() === 'match') await loadRouteData();
-    if (routeName() === 'admin' && state.me?.role === 'admin') await loadAdminData();
+    if (domains.has('public')) await refreshPublicData();
+    if (state.me && domains.has('private')) await refreshPrivateData();
+    if (domains.has('matchRoute') && page === 'match') await loadRouteData();
+    if (domains.has('admin') && page === 'admin' && state.me?.role === 'admin') await loadAdminData();
     notify();
   } catch { /* fast path */ }
 }
@@ -284,7 +296,7 @@ async function runTask(task, successMessage, showSuccess = true) {
     await task();
     if (showSuccess) setToast(successMessage, 'good');
   } catch (err) {
-    setToast(err instanceof ApiError ? err.message : 'Action failed', 'bad');
+    setToast(err instanceof Error ? err.message : 'Action failed', 'bad');
   } finally {
     state.busy = false;
     notify();
@@ -400,14 +412,21 @@ function App() {
 function HomePage() {
   const [expandedLeagueKey, setExpandedLeagueKey] = React.useState('');
   const isFocusedLeague = state.filters.league !== 'all';
-  const live = state.matches.filter(isMatchLive).slice(0, 4);
-  const upcomingAll = state.matches
-    .filter(isUpcomingMatch)
-    .sort((a, b) => new Date(a.kickoffTime || 0) - new Date(b.kickoffTime || 0));
-  const hotAll = [...state.matches]
-    .sort((a, b) => Number(b.hotScore || 0) - Number(a.hotScore || 0));
-  const upcomingByLeague = groupMatchesByLeague(upcomingAll, 8);
-  const hotByLeague = groupMatchesByLeague(hotAll, 8);
+  const { live, upcomingAll, hotAll, upcomingByLeague, hotByLeague } = React.useMemo(() => {
+    const live = state.matches.filter(isMatchLive).slice(0, 4);
+    const upcomingAll = state.matches
+      .filter(isUpcomingMatch)
+      .sort((a, b) => new Date(a.kickoffTime || 0) - new Date(b.kickoffTime || 0));
+    const hotAll = [...state.matches]
+      .sort((a, b) => Number(b.hotScore || 0) - Number(a.hotScore || 0));
+    return {
+      live,
+      upcomingAll,
+      hotAll,
+      upcomingByLeague: groupMatchesByLeague(upcomingAll, 8),
+      hotByLeague: groupMatchesByLeague(hotAll, 8)
+    };
+  }, [state.matches]);
 
   const handleFilterChange = async (key, value) => {
     state.filters[key] = value;
@@ -737,17 +756,20 @@ function MarketBoard({ match }) {
   const markets = Array.isArray(match.markets) ? match.markets : [];
   const [marketFilter, setMarketFilter] = React.useState('all');
 
+  const sections = React.useMemo(() => buildMarketSections(markets), [markets]);
+  const visibleSections = React.useMemo(
+    () => marketFilter === 'all' ? sections : sections.filter(s => s.key === marketFilter),
+    [marketFilter, sections]
+  );
+
+  const filterTabs = React.useMemo(() => [
+    { key: 'all', label: 'T\u1ea5t c\u1ea3', count: sections.reduce((t, s) => t + s.markets.length, 0) },
+    ...sections.map(s => ({ key: s.key, label: s.label, count: s.markets.length }))
+  ], [sections]);
+
   if (!markets.length) {
     return e('div', { className: 'empty' }, 'Ch\u01b0a c\u00f3 odds t\u1eeb ESPN cho tr\u1eadn n\u00e0y.');
   }
-
-  const sections = buildMarketSections(markets);
-  const visibleSections = marketFilter === 'all' ? sections : sections.filter(s => s.key === marketFilter);
-
-  const filterTabs = [
-    { key: 'all', label: 'T\u1ea5t c\u1ea3', count: sections.reduce((t, s) => t + s.markets.length, 0) },
-    ...sections.map(s => ({ key: s.key, label: s.label, count: s.markets.length }))
-  ];
 
   const handlePickChange = (marketKey, optionKey, market, option) => {
     // Remove if already selected
@@ -896,13 +918,43 @@ function ChatBox({ match }) {
 
 // ─── Bet Slip UI ──────────────────────────────────────────────────────────────
 function BetSlipUI() {
-  if (state.betSlip.length === 0) {
-    if (state.betSlipOpen) {
+  React.useEffect(() => {
+    if (state.betSlip.length === 0 && state.betSlipOpen) {
       state.betSlipOpen = false;
       notify();
+      return;
     }
-    return null;
-  }
+    if (state.betSlip.length <= 1 && state.betSlipType === 'parlay') {
+      state.betSlipType = 'single';
+      notify();
+    }
+  }, [state.betSlip.length, state.betSlipOpen, state.betSlipType]);
+
+  const betSlipOddsKey = state.betSlip.map(p => `${p.matchId}:${p.marketKey}:${p.optionKey}:${p.option?.odds}`).join('|');
+  const combinedOdds = React.useMemo(() => {
+    const picksByMatch = {};
+    state.betSlip.forEach(p => {
+      if (!picksByMatch[p.matchId]) picksByMatch[p.matchId] = [];
+      picksByMatch[p.matchId].push(p);
+    });
+
+    const getSgpMultiplier = (n) => {
+      if (n <= 1) return 1.0;
+      if (n === 2) return 0.92;
+      if (n === 3) return 0.76;
+      if (n === 4) return 0.52;
+      if (n === 5) return 0.34;
+      if (n === 6) return 0.22;
+      return Math.pow(0.66, n - 1);
+    };
+
+    return Object.values(picksByMatch).reduce((total, group) => {
+      const groupOdds = group.reduce((odds, p) => odds * Number(p.option.odds || 1), 1) * getSgpMultiplier(group.length);
+      return total * groupOdds;
+    }, 1.0);
+  }, [betSlipOddsKey]);
+
+  if (state.betSlip.length === 0) return null;
 
   const walletPoints = Math.max(0, Number(state.me?.walletBalance || state.me?.points || 0));
 
@@ -910,40 +962,15 @@ function BetSlipUI() {
   const removePick = (idx) => { state.betSlip.splice(idx, 1); notify(); };
 
   const canParlay = state.betSlip.length > 1;
-  if (!canParlay && state.betSlipType === 'parlay') state.betSlipType = 'single';
 
   const setType = (t) => { state.betSlipType = t; notify(); };
-
-  let combinedOdds = 1.0;
-  const picksByMatch = {};
-  state.betSlip.forEach(p => {
-    if (!picksByMatch[p.matchId]) picksByMatch[p.matchId] = [];
-    picksByMatch[p.matchId].push(p);
-  });
-
-  const getSgpMultiplier = (n) => {
-    if (n <= 1) return 1.0;
-    if (n === 2) return 0.92;
-    if (n === 3) return 0.76;
-    if (n === 4) return 0.52;
-    if (n === 5) return 0.34;
-    if (n === 6) return 0.22;
-    return Math.pow(0.66, n - 1);
-  };
-
-  Object.values(picksByMatch).forEach(group => {
-    let groupOdds = 1.0;
-    group.forEach(p => { groupOdds *= Number(p.option.odds || 1); });
-    groupOdds *= getSgpMultiplier(group.length);
-    combinedOdds *= groupOdds;
-  });
 
   const handlePlaceBet = async () => {
     if (!state.me) return setToast('Vui lòng đăng nhập', 'bad');
 
     if (state.betSlipType === 'parlay') {
       const stake = Number(state.parlayStake !== undefined ? state.parlayStake : 100);
-      if (!Number.isFinite(stake) || stake < 1) return setToast('Số điểm cược không hợp lệ (phải >= 1)', 'bad');
+      if (!Number.isFinite(stake) || stake < 1) return setToast('Giá trị không hợp lệ', 'bad');
       if (stake > walletPoints) return setToast('Không đủ điểm', 'bad');
 
       await runTask(async () => {
@@ -969,7 +996,7 @@ function BetSlipUI() {
           const rawStake = state.betSlipStakes[pickKey];
           const stake = Number(rawStake !== undefined ? rawStake : 100);
           if (!Number.isFinite(stake) || stake < 1) {
-            throw new Error('Số điểm cược không hợp lệ (phải >= 1)');
+            throw new Error('Giá trị không hợp lệ');
           }
           if (stake > walletPoints) {
             throw new Error('Không đủ điểm');
@@ -1004,8 +1031,18 @@ function BetSlipUI() {
     notify();
   };
 
+  const handleStakeAllIn = (pickKey) => {
+    state.betSlipStakes[pickKey] = walletPoints;
+    notify();
+  };
+
   const handleParlayStakeChange = (val) => {
     state.parlayStake = val;
+    notify();
+  };
+
+  const handleParlayAllIn = () => {
+    state.parlayStake = walletPoints;
     notify();
   };
 
@@ -1040,6 +1077,7 @@ function BetSlipUI() {
             ),
             state.betSlipType === 'single' ? e('div', { className: 'bet-slip-input', style: { marginTop: '8px' } },
               e('input', { type: 'number', min: 1, placeholder: 'Nhập điểm...', value: rawStake, onChange: ev => handleStakeChange(pickKey, ev.target.value) }),
+              e('button', { className: 'bet-slip-all-in', type: 'button', onClick: () => handleStakeAllIn(pickKey) }, 'All in'),
               e('div', { className: 'bet-slip-payout' },
                 'Trả về: ', e('strong', null, formatNumber(returnAmt))
               )
@@ -1056,6 +1094,7 @@ function BetSlipUI() {
           e('div', { className: 'bet-slip-note' }, 'Tỷ lệ xiên đã được nâng nhẹ'),
           e('div', { className: 'bet-slip-input' },
             e('input', { type: 'number', min: 1, placeholder: 'Nhập điểm...', value: state.parlayStake !== undefined ? state.parlayStake : 100, onChange: ev => handleParlayStakeChange(ev.target.value) }),
+            e('button', { className: 'bet-slip-all-in', type: 'button', onClick: handleParlayAllIn }, 'All in'),
             e('div', { className: 'bet-slip-payout' },
               'Trả về: ', e('strong', null, formatNumber(Math.round(Number(state.parlayStake !== undefined ? state.parlayStake : 100) * combinedOdds)))
             )
