@@ -947,6 +947,20 @@ tr:hover td {
   font-weight: 600;
 }
 
+.team-logo {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.league-tabs,
+.league-group-tabs {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
 /* ─── Floating Bet Slip ──────────────────────────────────────────────────── */
 .bet-slip-toggle {
   position: fixed;
@@ -1387,6 +1401,13 @@ tr:hover td {
   background: rgba(239, 68, 68, 0.1);
   border-color: var(--red);
   color: var(--red);
+}
+
+.parlay-score {
+  min-width: 64px;
+  justify-content: center;
+  padding: 6px 14px;
+  margin-left: auto;
 }
 
 .outcome-badge {

@@ -27,6 +27,10 @@ function buildOddsUrl(sport, league, eventId, competitionId) {
   return `https://sports.core.api.espn.com/v2/sports/${sport}/leagues/${league}/events/${eventId}/competitions/${competitionId}/odds?lang=en&region=us`;
 }
 
+function buildStandingsUrl(sport, league) {
+  return `https://site.web.api.espn.com/apis/v2/sports/${sport}/${league}/standings`;
+}
+
 async function fetchJson(url, timeoutMs = 5000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -132,6 +136,59 @@ async function fetchLeagueMatches(leagueItem, dateKey) {
   const payload = await fetchJson(url);
   const events = Array.isArray(payload.events) ? payload.events : [];
   return events.map((event) => mapEventToMatch(event, leagueItem, dateKey));
+}
+
+function statNumber(stats, keys) {
+  const normalized = new Set(keys.map((key) => String(key).toLowerCase()));
+  const found = (stats || []).find((stat) => {
+    const names = [stat.name, stat.displayName, stat.abbreviation].map((value) => String(value || '').toLowerCase());
+    return names.some((name) => normalized.has(name));
+  });
+  const value = Number(found?.value ?? found?.displayValue);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function mapStandingEntry(entry, index) {
+  const team = entry.team || {};
+  const stats = Array.isArray(entry.stats) ? entry.stats : [];
+  const rank = statNumber(stats, ['rank', 'r']) || Number(entry.rank || index + 1);
+  return {
+    rank,
+    teamId: String(team.id || entry.id || ''),
+    teamName: team.displayName || team.name || entry.displayName || `Team #${index + 1}`,
+    abbreviation: team.abbreviation || team.shortDisplayName || '',
+    logo: team.logo || team.logos?.[0]?.href || '',
+    played: statNumber(stats, ['gamesPlayed', 'Games Played', 'GP']),
+    wins: statNumber(stats, ['wins', 'Wins', 'W']),
+    draws: statNumber(stats, ['ties', 'draws', 'Draws', 'D']),
+    losses: statNumber(stats, ['losses', 'Losses', 'L']),
+    goalsFor: statNumber(stats, ['pointsFor', 'Goals For', 'F', 'GF']),
+    goalsAgainst: statNumber(stats, ['pointsAgainst', 'Goals Against', 'A', 'GA']),
+    goalDifference: statNumber(stats, ['pointDifferential', 'Goal Difference', 'GD']),
+    points: statNumber(stats, ['points', 'Points', 'P', 'Pts'])
+  };
+}
+
+async function fetchLeagueStandings(leagueItem) {
+  const url = buildStandingsUrl(leagueItem.sport, leagueItem.league);
+  const payload = await fetchJson(url, 10000);
+  const children = Array.isArray(payload.children) ? payload.children : [];
+  const sourceGroups = children.length ? children : [{ id: 'overall', name: payload.name || 'Standings', standings: payload.standings }];
+  const groups = sourceGroups.map((group, index) => {
+    const entries = Array.isArray(group.standings?.entries) ? group.standings.entries : [];
+    return {
+      id: String(group.id || group.uid || index),
+      name: group.name || group.abbreviation || group.standings?.displayName || 'Standings',
+      entries: entries.map((entry, entryIndex) => mapStandingEntry(entry, entryIndex))
+    };
+  }).filter((group) => group.entries.length);
+
+  return {
+    league: leagueItem.league,
+    label: leagueItem.label,
+    name: payload.name || leagueItem.label,
+    groups
+  };
 }
 
 function decimalFromFraction(value) {
@@ -679,6 +736,7 @@ function getMultiplier(match, prediction, settings) {
 module.exports = {
   syncMatches,
   upsertMatches,
+  fetchLeagueStandings,
   createDemoFixtures,
   isMatchLocked,
   matchOutcome,

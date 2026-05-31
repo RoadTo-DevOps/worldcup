@@ -39,6 +39,12 @@ const state = {
   parlayStake: 100,
   filters: { league: 'all', status: 'all', date: '', q: '' },
   leaderboardPeriod: 'all-time',
+  leaderboardTab: 'users',
+  leagueLeaderboardLeague: 'eng.1',
+  leagueLeaderboardGroup: null,
+  leagueStandings: null,
+  leagueStandingsLoading: false,
+  leagueStandingsError: null,
   toast: null,
   stream: null,
   busy: false
@@ -201,6 +207,27 @@ async function refreshPublicDataQuiet() {
     await refreshPublicData();
     notify();
   } catch { /* keep alive */ }
+}
+
+async function loadLeagueStandings(league = state.leagueLeaderboardLeague) {
+  state.leagueStandingsLoading = true;
+  state.leagueStandingsError = null;
+  notify();
+  try {
+    const data = await api(`/api/league-standings?league=${encodeURIComponent(league)}`);
+    const groups = data.groups || [];
+    state.leagueLeaderboardLeague = data.league || league;
+    state.leagueStandings = data;
+    state.leagueLeaderboardGroup = groups.some(group => String(group.id) === String(state.leagueLeaderboardGroup))
+      ? state.leagueLeaderboardGroup
+      : groups[0]?.id || null;
+  } catch (err) {
+    state.leagueStandings = null;
+    state.leagueStandingsError = err.message || 'Unable to load standings.';
+  } finally {
+    state.leagueStandingsLoading = false;
+    notify();
+  }
 }
 
 async function refreshPrivateData() {
@@ -627,53 +654,148 @@ function LeaderboardMini() {
 }
 
 // ─── Leaderboard page ─────────────────────────────────────────────────────────
+function UserLeaderboardTable() {
+  return e('div', { className: 'table-wrap' },
+    e('table', null,
+      e('thead', null,
+        e('tr', null,
+          e('th', null, 'Rank'), e('th', null, 'User'), e('th', null, 'Points'),
+          e('th', null, 'Accuracy'), e('th', null, 'Matches')
+        )
+      ),
+      e('tbody', null,
+        state.leaderboard.map(row =>
+          e('tr', { key: row.id },
+            e('td', null, `#${row.rank}`),
+            e('td', null,
+              e('span', { className: 'cell-user' },
+                e(UserAvatar, { user: { username: row.username }, avatar: leaderboardAvatar(row) }),
+                row.username
+              )
+            ),
+            e('td', null, formatNumber(state.leaderboardPeriod === 'all-time' ? row.points : row.periodPoints)),
+            e('td', null, `${row.accuracy}%`),
+            e('td', null, formatNumber(row.predictions))
+          )
+        )
+      )
+    )
+  );
+}
+
+function LeagueStandingsTable() {
+  if (state.leagueStandingsLoading) return e('div', { className: 'empty' }, 'Loading standings...');
+  if (state.leagueStandingsError) return e('div', { className: 'empty' }, state.leagueStandingsError);
+  const groups = state.leagueStandings?.groups || [];
+  if (!groups.length) return e('div', { className: 'empty' }, 'No standings available.');
+  const selectedGroup = groups.find(group => String(group.id) === String(state.leagueLeaderboardGroup)) || groups[0];
+  return e(React.Fragment, null,
+    groups.length > 1 ? e('div', { className: 'segmented league-group-tabs' },
+      groups.map(group =>
+        e('button', {
+          key: group.id,
+          className: String(state.leagueLeaderboardGroup) === String(group.id) ? 'active' : undefined,
+          onClick: () => { state.leagueLeaderboardGroup = group.id; notify(); }
+        }, group.name)
+      )
+    ) : null,
+    e('div', { className: 'table-wrap' },
+      e('table', null,
+        e('thead', null,
+          e('tr', null,
+            e('th', null, 'Rank'), e('th', null, 'Team'), e('th', null, 'Played'),
+            e('th', null, 'W'), e('th', null, 'D'), e('th', null, 'L'),
+            e('th', null, 'GF'), e('th', null, 'GA'), e('th', null, 'GD'), e('th', null, 'Pts')
+          )
+        ),
+        e('tbody', null,
+          selectedGroup.entries.map(row =>
+            e('tr', { key: row.teamId || row.teamName },
+              e('td', null, `#${row.rank}`),
+              e('td', null,
+                e('span', { className: 'cell-user' },
+                  row.logo ? e('img', { className: 'team-logo', src: row.logo, alt: `${row.teamName} logo` }) : null,
+                  row.teamName
+                )
+              ),
+              e('td', null, formatNumber(row.played)),
+              e('td', null, formatNumber(row.wins)),
+              e('td', null, formatNumber(row.draws)),
+              e('td', null, formatNumber(row.losses)),
+              e('td', null, formatNumber(row.goalsFor)),
+              e('td', null, formatNumber(row.goalsAgainst)),
+              e('td', null, formatNumber(row.goalDifference)),
+              e('td', null, e('strong', null, formatNumber(row.points)))
+            )
+          )
+        )
+      )
+    )
+  );
+}
+
 function LeaderboardPage() {
+  React.useEffect(() => {
+    if (state.leaderboardTab === 'leagues' && !state.leagueStandings && !state.leagueStandingsLoading) {
+      loadLeagueStandings(state.leagueLeaderboardLeague);
+    }
+  }, [state.leaderboardTab]);
+
   const handlePeriod = period => runTask(async () => {
     state.leaderboardPeriod = period;
     await refreshPublicData();
   }, 'Leaderboard updated');
+
+  const handleTab = tab => {
+    state.leaderboardTab = tab;
+    notify();
+    if (tab === 'leagues' && !state.leagueStandings) loadLeagueStandings(state.leagueLeaderboardLeague);
+  };
+
+  const handleLeague = league => {
+    state.leagueLeaderboardLeague = league;
+    state.leagueLeaderboardGroup = null;
+    loadLeagueStandings(league);
+  };
 
   return e(React.Fragment, null,
     e(ToastBar, null),
     e('section', { className: 'page-head' },
       e('div', null, e('p', { className: 'eyebrow' }, 'Competition'), e('h1', null, 'Leaderboard')),
       e('div', { className: 'segmented' },
-        ['all-time', 'week', 'month'].map(period =>
-          e('button', {
-            key: period,
-            className: state.leaderboardPeriod === period ? 'active' : undefined,
-            onClick: () => handlePeriod(period)
-          }, period)
-        )
+        e('button', { className: state.leaderboardTab === 'users' ? 'active' : undefined, onClick: () => handleTab('users') }, 'Leaderboard user'),
+        e('button', { className: state.leaderboardTab === 'leagues' ? 'active' : undefined, onClick: () => handleTab('leagues') }, 'Leaderboard league')
       )
     ),
-    e('section', { className: 'panel' },
-      e('div', { className: 'table-wrap' },
-        e('table', null,
-          e('thead', null,
-            e('tr', null,
-              e('th', null, 'Rank'), e('th', null, 'User'), e('th', null, 'Points'),
-              e('th', null, 'Accuracy'), e('th', null, 'Matches')
-            )
-          ),
-          e('tbody', null,
-            state.leaderboard.map(row =>
-              e('tr', { key: row.id },
-                e('td', null, `#${row.rank}`),
-                e('td', null,
-                  e('span', { className: 'cell-user' },
-                    e(UserAvatar, { user: { username: row.username }, avatar: leaderboardAvatar(row) }),
-                    row.username
-                  )
-                ),
-                e('td', null, formatNumber(state.leaderboardPeriod === 'all-time' ? row.points : row.periodPoints)),
-                e('td', null, `${row.accuracy}%`),
-                e('td', null, formatNumber(row.predictions))
-              )
-            )
+    state.leaderboardTab === 'users' ? e('section', { className: 'panel' },
+      e('div', { className: 'section-head' },
+        e('h2', null, 'Leaderboard user'),
+        e('div', { className: 'segmented' },
+          ['all-time', 'week', 'month'].map(period =>
+            e('button', {
+              key: period,
+              className: state.leaderboardPeriod === period ? 'active' : undefined,
+              onClick: () => handlePeriod(period)
+            }, period)
           )
         )
-      )
+      ),
+      e(UserLeaderboardTable, null)
+    ) : e('section', { className: 'panel' },
+      e('div', { className: 'section-head' },
+        e('h2', null, 'Leaderboard league'),
+        e('span', null, state.leagueStandings?.name || '')
+      ),
+      e('div', { className: 'segmented league-tabs' },
+        LEAGUES.filter(league => league.value !== 'all').map(league =>
+          e('button', {
+            key: league.value,
+            className: state.leagueLeaderboardLeague === league.value ? 'active' : undefined,
+            onClick: () => handleLeague(league.value)
+          }, league.label)
+        )
+      ),
+      e(LeagueStandingsTable, null)
     )
   );
 }
@@ -1340,7 +1462,7 @@ function ParlaysHistory() {
                 e('div', { style: { fontSize: '14px', fontWeight: 'bold' } }, leg.market?.title)
               ),
               e('div', { style: { textAlign: 'right' } },
-                e('div', { style: { color: 'var(--text)' } }, `${leg.option?.label} @ ${oddsValue(leg.option?.odds)}`),
+                e('div', { className: `score-pill parlay-score ${result.tone === 'live' ? 'score-live' : ''}` }, result.score),
                 e('div', { style: { fontSize: '12px', color: 'var(--muted)', marginTop: '2px' } }, leg.status.toUpperCase())
               )
             );

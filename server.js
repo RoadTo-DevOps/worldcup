@@ -39,6 +39,7 @@ const {
 const {
   syncMatches,
   upsertMatches,
+  fetchLeagueStandings,
   isMatchLocked,
   matchOutcome,
   getMultiplier
@@ -1343,6 +1344,14 @@ async function handleApi(req, res, urlObj) {
         period,
         leaderboard: buildLeaderboard(period)
       });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/league-standings') {
+      const league = String(searchParams.get('league') || leagueCatalog[0]?.league || '');
+      const leagueItem = leagueCatalog.find((item) => item.league === league);
+      if (!leagueItem) return fail(res, 400, 'League invalid');
+      const standings = await fetchLeagueStandings(leagueItem);
+      return ok(res, 'League standings', standings);
     }
 
     if (req.method === 'GET' && pathname.startsWith('/api/chat/')) {
