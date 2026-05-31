@@ -229,7 +229,7 @@ async function loadRouteData() {
     state.detail = detail.match;
     state.chat = detail.chat || [];
   }
-  if (name === 'profile' && state.me) await refreshPrivateData();
+  if ((name === 'profile' || name === 'history') && state.me) await refreshPrivateData();
   if (name === 'admin' && state.me?.role === 'admin') await loadAdminData();
 }
 
@@ -345,7 +345,7 @@ function TopBar() {
   const navItems = [
     ['home', 'Home', '#/home'],
     ['leaderboard', 'Leaderboard', '#/leaderboard'],
-    ...(state.me ? [['profile', 'Profile', '#/profile']] : []),
+    ...(state.me ? [['profile', 'Profile', '#/profile'], ['history', 'History', '#/history']] : []),
     ...(state.me?.role === 'admin' ? [['admin', 'Admin', '#/admin']] : [])
   ];
 
@@ -394,6 +394,7 @@ function App() {
     register: RegisterPage,
     leaderboard: LeaderboardPage,
     profile: ProfilePage,
+    history: HistoryPage,
     match: MatchPage,
     admin: AdminPage
   };
@@ -1112,7 +1113,6 @@ function ProfilePage() {
   const [currentPassword, setCurrentPassword] = React.useState('');
   const [newPassword, setNewPassword] = React.useState('');
   const [confirmPassword, setConfirmPassword] = React.useState('');
-  const [historyTab, setHistoryTab] = React.useState('single');
 
   React.useEffect(() => {
     setAvatar(state.me?.avatar || '');
@@ -1169,7 +1169,7 @@ function ProfilePage() {
     e('section', { className: 'stats-grid' },
       e('div', { className: 'stat' }, e('span', null, 'Points'), e('b', null, formatNumber(state.me.points))),
       e('div', { className: 'stat' }, e('span', null, 'Rank'), e('b', null, rank ? `#${rank.rank}` : '-')),
-      e('div', { className: 'stat' }, e('span', null, 'Bets'), e('b', null, formatNumber(state.predictions.length))),
+      e('div', { className: 'stat' }, e('span', null, 'Bets'), e('b', null, formatNumber(state.predictions.length + state.parlays.length))),
       e('div', { className: 'stat' }, e('span', null, 'Transactions'), e('b', null, formatNumber(state.walletHistory.length)))
     ),
     e('section', { className: 'grid two' },
@@ -1232,22 +1232,49 @@ function ProfilePage() {
         )
       )
     ),
-    e('section', { className: 'grid two' },
-      e('div', { className: 'panel' },
-        e('div', { className: 'section-head' }, e('h2', null, 'Lịch sử cược')),
-        e('div', { className: 'profile-tabs' },
-          e('button', { className: `profile-tab ${historyTab === 'single' ? 'active' : ''}`, onClick: () => setHistoryTab('single') }, 'Cược Đơn'),
-          e('button', { className: `profile-tab ${historyTab === 'parlay' ? 'active' : ''}`, onClick: () => setHistoryTab('parlay') }, 'Cược Xiên')
-        ),
-        historyTab === 'single' ? e(PredictionsHistory, null) : e(ParlaysHistory, null)
-      ),
-      e('div', { className: 'panel' },
-        e('div', { className: 'section-head' }, e('h2', null, 'Wallet history')),
-        e(GiftCodeRedeemForm, null),
-        e(WalletHistory, null)
-      )
+    e('section', { className: 'panel' },
+      e('div', { className: 'section-head' }, e('h2', null, 'Wallet history')),
+      e(GiftCodeRedeemForm, null),
+      e(WalletHistory, null)
     )
   );
+}
+
+function HistoryPage() {
+  const [historyTab, setHistoryTab] = React.useState('single');
+
+  if (!state.me) return e(React.Fragment, null,
+    e(ToastBar, null),
+    e('section', { className: 'panel' },
+      e('div', { className: 'empty' }, 'Login to view betting history. ', e('a', { href: '#/login' }, 'Login'))
+    )
+  );
+
+  return e(React.Fragment, null,
+    e(ToastBar, null),
+    e('section', { className: 'page-head' },
+      e('div', null,
+        e('p', { className: 'eyebrow' }, 'History'),
+        e('h1', null, 'Lịch sử cược')
+      ),
+      e('span', { className: 'chip' }, `${formatNumber(state.predictions.length + state.parlays.length)} bets`)
+    ),
+    e('section', { className: 'panel' },
+      e('div', { className: 'section-head' }, e('h2', null, 'Lịch sử cược')),
+      e('div', { className: 'profile-tabs' },
+        e('button', { className: `profile-tab ${historyTab === 'single' ? 'active' : ''}`, onClick: () => setHistoryTab('single') }, 'Cược Đơn'),
+        e('button', { className: `profile-tab ${historyTab === 'parlay' ? 'active' : ''}`, onClick: () => setHistoryTab('parlay') }, 'Cược Xiên')
+      ),
+      historyTab === 'single' ? e(PredictionsHistory, null) : e(ParlaysHistory, null)
+    )
+  );
+}
+
+function betHistoryResultText(status, stake, reward) {
+  if (status === 'won') return `Thắng +${formatNumber(Math.max(0, Number(reward || 0) - Number(stake || 0)))} pts`;
+  if (status === 'lost') return `Thua -${formatNumber(stake)} pts`;
+  if (status === 'refunded') return 'Hoàn cược';
+  return 'Đang chờ kết quả';
 }
 
 function PredictionsHistory() {
@@ -1255,6 +1282,8 @@ function PredictionsHistory() {
   return e('div', { className: 'stack-list' },
     state.predictions.slice(0, 30).map((pred, i) => {
       const result = matchResultSummary(pred.match);
+      const stake = Number(pred.betPoints || 0);
+      const reward = Number(pred.rewardPoints || 0);
       return e('div', { key: i, className: `history-row pred-${pred.status}` },
         e('div', null,
           e('b', null, pred.match ? `${pred.match.homeTeam} vs ${pred.match.awayTeam}` : `Match #${pred.matchId}`),
@@ -1267,8 +1296,11 @@ function PredictionsHistory() {
         ),
         e('div', { className: 'pred-actions', style: { textAlign: 'right' } },
           e('div', { className: `outcome-badge outcome-${pred.status}` }, pred.status),
-          e('div', { style: { marginTop: '4px', fontWeight: 'bold', fontSize: '15px' }, className: betStatusTone(pred.status) },
-            `${formatNumber(pred.rewardPoints)} pts`
+          e('div', { style: { marginTop: '4px', fontWeight: 'bold', fontSize: '15px' } },
+            `${formatNumber(stake)} pts`
+          ),
+          e('div', { style: { marginTop: '2px', fontSize: '12px' }, className: betStatusTone(pred.status) },
+            betHistoryResultText(pred.status, stake, reward)
           )
         )
       );
@@ -1280,6 +1312,8 @@ function ParlaysHistory() {
   if (!state.parlays.length) return e('div', { className: 'empty' }, 'Chưa có vé cược xiên nào.');
   return e('div', { className: 'stack-list' },
     state.parlays.slice(0, 30).map((parlay, i) => {
+      const stake = Number(parlay.betPoints || 0);
+      const reward = Number(parlay.rewardPoints || 0);
       return e('div', { key: i, className: `parlay-card` },
         e('div', { className: 'parlay-header' },
           e('div', null,
@@ -1288,8 +1322,11 @@ function ParlaysHistory() {
           ),
           e('div', { className: 'pred-actions', style: { textAlign: 'right' } },
             e('div', { className: `outcome-badge outcome-${parlay.status}` }, parlay.status),
-            e('div', { style: { marginTop: '4px', fontWeight: 'bold', fontSize: '15px' }, className: betStatusTone(parlay.status) },
-              `${formatNumber(parlay.rewardPoints)} pts`
+            e('div', { style: { marginTop: '4px', fontWeight: 'bold', fontSize: '15px' } },
+              `${formatNumber(stake)} pts`
+            ),
+            e('div', { style: { marginTop: '2px', fontSize: '12px' }, className: betStatusTone(parlay.status) },
+              betHistoryResultText(parlay.status, stake, reward)
             )
           )
         ),
